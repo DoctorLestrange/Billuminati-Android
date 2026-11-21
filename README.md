@@ -11,9 +11,20 @@
 [![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-18181B?style=flat-square&logo=jetpackcompose&logoColor=white)](https://developer.android.com/compose)
 [![Storage](https://img.shields.io/badge/Storage-Room%20SQLite%20%2B%20DataStore-18181B?style=flat-square)](https://developer.android.com/training/data-storage/room)
 [![Privacy](https://img.shields.io/badge/Permissions-Zero%20Runtime%20Permissions-065F46?style=flat-square)](#privacy--permissions)
+[![Download APK](https://img.shields.io/badge/Download-Latest%20APK-18181B?style=flat-square&logo=github)](../../releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-18181B?style=flat-square)](LICENSE)
 
 </div>
+
+---
+
+## Download APK
+
+Ready-to-install Android APKs (plus `SHA256SUMS.txt` verification checksums) are built automatically by GitHub Actions on every push to `main` and every version tag (`v*`):
+
+1. Open [**Releases -> Latest**](../../releases/latest).
+2. Download **`Billuminati-v1.0.apk`** onto your Android 7.0+ (API 24+) device.
+3. Tap the downloaded APK to install (enable *Install unknown apps* if prompted).
 
 ---
 
@@ -174,6 +185,8 @@ gradle :app:lintDebug
    # Direct distribution APK
    gradle :app:assembleRelease
    ```
+
+> **Automated GitHub Releases**: Every push to `main` (and every `v*` tag) automatically publishes a directly installable APK to **GitHub Releases**. To sign those automated releases with your production upload key (and also publish an `.aab` bundle), add `RELEASE_KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` under **Settings -> Secrets and variables -> Actions**.
 
 > **Note on Play Store Publishing**: Before publishing to Google Play, update `applicationId` in `app/build.gradle.kts` to your own reverse-domain package identifier (e.g., `com.yourorg.billuminati`) and optionally enable `isMinifyEnabled = true` (`app/proguard-rules.pro` already includes keep rules for Moshi adapters, domain models, and Room).
 

@@ -1,4 +1,4 @@
-name: Android CI
+name: Android CI & Direct APK Release
 
 on:
   push:
@@ -7,13 +7,16 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: android-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-test-lint:
-    name: Build, Unit Tests & Lint
+  build-test-release:
+    name: Build, Test, Lint & APK
     runs-on: ubuntu-latest
 
     steps:
@@ -26,22 +29,60 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - name: Install Android SDK 36.1 & Accept Licenses
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
+            echo "Error: ANDROID_HOME / ANDROID_SDK_ROOT not found on runner." >&2
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+          SDK_MANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDK_MANAGER" ]; then
+            SDK_MANAGER="$(find "$SDK_ROOT" -name sdkmanager -type f 2>/dev/null | head -n 1)"
+          fi
+          if [ -z "$SDK_MANAGER" ] || [ ! -x "$SDK_MANAGER" ]; then
+            echo "Error: sdkmanager not found under $SDK_ROOT" >&2
+            exit 1
+          fi
+
+          echo "Using sdkmanager: $SDK_MANAGER"
+          set +o pipefail
+          yes | "$SDK_MANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null
+          set -o pipefail
+
+          "$SDK_MANAGER" --sdk_root="$SDK_ROOT" --install \
+            "platform-tools" \
+            "build-tools;36.0.0" \
+            "platforms;android-36" \
+            "platforms;android-36.1"
+
+          echo "Installed Android SDK platforms:"
+          ls -la "$SDK_ROOT/platforms"
+          echo "Installed Android SDK build-tools:"
+          ls -la "$SDK_ROOT/build-tools"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 9.3.1
 
-      - name: Prepare debug signing keystore for CI
+      - name: Prepare Environment & Debug Signing Keystore
         run: |
-          if [ ! -f debug.keystore ]; then
-            if [ -f debug.keystore.base64 ]; then
-              base64 -d debug.keystore.base64 > debug.keystore
-            else
-              keytool -genkey -v -keystore debug.keystore \
-                -storepass android -alias androiddebugkey -keypass android \
-                -keyalg RSA -keysize 2048 -validity 10000 \
-                -dname "CN=Android Debug,O=Android,C=US"
-            fi
+          [ -f .env.example ] || touch .env.example
+
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            tr -d '\r\n ' < debug.keystore.base64 | base64 -d > debug.keystore || rm -f debug.keystore
+          fi
+
+          if [ ! -s debug.keystore ] || ! keytool -list -keystore debug.keystore -storepass android >/dev/null 2>&1; then
+            rm -f debug.keystore
+            keytool -genkey -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
 
       - name: Run Unit & Robolectric Tests
@@ -50,8 +91,34 @@ jobs:
       - name: Run Android Lint
         run: gradle :app:lintDebug --stacktrace
 
-      - name: Assemble Debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Build Installable Android APK
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          VERSION_NAME=$(grep -oE 'versionName[[:space:]]*=[[:space:]]*"[^"]+"' app/build.gradle.kts | head -n 1 | cut -d'"' -f2)
+          VERSION_NAME="${VERSION_NAME:-1.0}"
+          mkdir -p dist
+
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "Release signing secrets detected — building signed Release APK & AAB..."
+            printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > my-upload-key.jks
+            export KEYSTORE_PATH="$PWD/my-upload-key.jks"
+            gradle :app:assembleRelease :app:bundleRelease --stacktrace
+            cp app/build/outputs/apk/release/app-release.apk "dist/Billuminati-v${VERSION_NAME}.apk"
+            cp app/build/outputs/bundle/release/app-release.aab "dist/Billuminati-v${VERSION_NAME}.aab"
+            echo "BUILD_VARIANT=release" >> "$GITHUB_ENV"
+          else
+            echo "No release keystore secrets configured — building directly installable signed APK..."
+            gradle :app:assembleDebug --stacktrace
+            cp app/build/outputs/apk/debug/app-debug.apk "dist/Billuminati-v${VERSION_NAME}.apk"
+            echo "BUILD_VARIANT=debug" >> "$GITHUB_ENV"
+          fi
+
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          echo "VERSION_NAME=${VERSION_NAME}" >> "$GITHUB_ENV"
+          ls -lh dist/
 
       - name: Upload Test Reports
         if: always()
@@ -69,9 +136,30 @@ jobs:
           path: app/build/reports/lint-results-debug.html
           if-no-files-found: ignore
 
-      - name: Upload Debug APK
+      - name: Upload Downloadable APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: billuminati-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: billuminati-android-apk
+          path: dist/*
           if-no-files-found: error
+
+      - name: Publish Direct-Download GitHub Release
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Billuminati v${{ env.VERSION_NAME }} (Latest Android Build)"
+          make_latest: true
+          body: |
+            ## Billuminati for Android (`v${{ env.VERSION_NAME }}`)
+
+            Offline-first Indian GST Tax Invoice & Billing Studio — built natively with Kotlin, Jetpack Compose, Material Design 3, and Room SQLite.
+
+            ### Direct APK Installation
+            1. Download **`Billuminati-v${{ env.VERSION_NAME }}.apk`** from the **Assets** section below.
+            2. Open the APK on your Android 7.0+ (API 24+) device and allow installing from your browser/files app if prompted.
+            3. Verify integrity optionally with `SHA256SUMS.txt`.
+
+            *Build variant: `${{ env.BUILD_VARIANT }}` · Commit: `${{ github.sha }}`*
+          files: |
+            dist/*
