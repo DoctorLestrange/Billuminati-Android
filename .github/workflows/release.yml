@@ -50,13 +50,14 @@ jobs:
             "platforms;android-36" \
             "platforms;android-36.1"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: 9.3.1
 
       - name: Prepare Environment & Debug Signing Keystore
         run: |
+          which gradle && gradle --version
           [ -f .env.example ] || touch .env.example
 
           if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
@@ -73,8 +74,8 @@ jobs:
 
       - name: Verify Tests & Lint
         run: |
-          gradle :app:testDebugUnitTest --stacktrace
-          gradle :app:lintDebug --stacktrace
+          gradle :app:testDebugUnitTest --no-configuration-cache --console=plain
+          gradle :app:lintDebug --no-configuration-cache --console=plain
 
       - name: Build Release APK (and AAB if signing secrets configured)
         env:
@@ -88,12 +89,12 @@ jobs:
           if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
             printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > my-upload-key.jks
             export KEYSTORE_PATH="$PWD/my-upload-key.jks"
-            gradle :app:assembleRelease :app:bundleRelease --stacktrace
+            gradle :app:assembleRelease :app:bundleRelease --no-configuration-cache --console=plain
             cp app/build/outputs/apk/release/app-release.apk "dist/Billuminati-${RELEASE_TAG}.apk"
             cp app/build/outputs/bundle/release/app-release.aab "dist/Billuminati-${RELEASE_TAG}.aab"
             echo "BUILD_VARIANT=release" >> "$GITHUB_ENV"
           else
-            gradle :app:assembleDebug --stacktrace
+            gradle :app:assembleDebug --no-configuration-cache --console=plain
             cp app/build/outputs/apk/debug/app-debug.apk "dist/Billuminati-${RELEASE_TAG}.apk"
             echo "BUILD_VARIANT=debug" >> "$GITHUB_ENV"
           fi

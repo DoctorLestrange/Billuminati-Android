@@ -59,18 +59,16 @@ jobs:
             "platforms;android-36" \
             "platforms;android-36.1"
 
-          echo "Installed Android SDK platforms:"
-          ls -la "$SDK_ROOT/platforms"
-          echo "Installed Android SDK build-tools:"
-          ls -la "$SDK_ROOT/build-tools"
+          ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: 9.3.1
 
       - name: Prepare Environment & Debug Signing Keystore
         run: |
+          which gradle && gradle --version
           [ -f .env.example ] || touch .env.example
 
           if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
@@ -86,10 +84,10 @@ jobs:
           fi
 
       - name: Run Unit & Robolectric Tests
-        run: gradle :app:testDebugUnitTest --stacktrace
+        run: gradle :app:testDebugUnitTest --no-configuration-cache --console=plain
 
       - name: Run Android Lint
-        run: gradle :app:lintDebug --stacktrace
+        run: gradle :app:lintDebug --no-configuration-cache --console=plain
 
       - name: Build Installable Android APK
         env:
@@ -105,13 +103,13 @@ jobs:
             echo "Release signing secrets detected — building signed Release APK & AAB..."
             printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > my-upload-key.jks
             export KEYSTORE_PATH="$PWD/my-upload-key.jks"
-            gradle :app:assembleRelease :app:bundleRelease --stacktrace
+            gradle :app:assembleRelease :app:bundleRelease --no-configuration-cache --console=plain
             cp app/build/outputs/apk/release/app-release.apk "dist/Billuminati-v${VERSION_NAME}.apk"
             cp app/build/outputs/bundle/release/app-release.aab "dist/Billuminati-v${VERSION_NAME}.aab"
             echo "BUILD_VARIANT=release" >> "$GITHUB_ENV"
           else
             echo "No release keystore secrets configured — building directly installable signed APK..."
-            gradle :app:assembleDebug --stacktrace
+            gradle :app:assembleDebug --no-configuration-cache --console=plain
             cp app/build/outputs/apk/debug/app-debug.apk "dist/Billuminati-v${VERSION_NAME}.apk"
             echo "BUILD_VARIANT=debug" >> "$GITHUB_ENV"
           fi
