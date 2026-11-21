@@ -69,6 +69,15 @@ jobs:
       - name: Prepare Environment & Debug Signing Keystore
         run: |
           which gradle && gradle --version
+
+          for required_file in settings.gradle.kts build.gradle.kts gradle.properties gradle/libs.versions.toml app/build.gradle.kts; do
+            if [ ! -f "$required_file" ]; then
+              echo "::error::Missing required Gradle file '$required_file' in this repository. Commit and push '$required_file' to GitHub."
+              ls -la . gradle/ 2>&1 || true
+              exit 1
+            fi
+          done
+
           [ -f .env.example ] || touch .env.example
 
           if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then

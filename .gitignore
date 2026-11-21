@@ -43,3 +43,7 @@ google-services.json
 *.log
 .DS_Store
 Thumbs.db
+
+# Always track Gradle version catalog and wrapper properties
+!gradle/libs.versions.toml
+!gradle/wrapper/gradle-wrapper.properties
