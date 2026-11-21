@@ -1,0 +1,6 @@
+{
+  "name": "Billuminati",
+  "description": "Offline-first Indian GST Tax Invoice & Billing Studio with bidirectional pricing, native IBM Plex Serif PDF export, and portable JSON backups.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

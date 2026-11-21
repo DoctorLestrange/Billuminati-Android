@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Back up Room SQLite database and DataStore preferences on API <= 30.
+         App cache directories (including cache/exports/) are excluded automatically by Android. -->
+    <include domain="database" path="." />
+    <include domain="file" path="datastore/" />
+</full-backup-content>

@@ -1,0 +1,45 @@
+# Gradle & Kotlin caches
+.gradle/
+.kotlin/
+build/
+/build
+/app/build
+.build-outputs/
+.aistudio/
+
+# IDE & Editor files
+*.iml
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.vscode/
+
+# Local environment & secrets
+local.properties
+/local.properties
+.env
+.env.local
+
+# Android build artifacts & signing keys
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.jks
+*.keystore
+*.p12
+debug.keystore
+google-services.json
+
+# Profiling, logs & OS metadata
+/captures
+.externalNativeBuild
+.cxx
+*.hprof
+*.log
+.DS_Store
+Thumbs.db
