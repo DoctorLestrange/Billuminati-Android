@@ -7,12 +7,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag name (e.g. v1.0.0)"
+        description: "Release tag name (e.g. v0.2.0)"
         required: true
-        default: "v1.0.0"
+        default: "v0.2.0"
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -32,6 +36,10 @@ jobs:
       - name: Install Android SDK 36.1 & Accept Licenses
         run: |
           SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
+            echo "Error: ANDROID_HOME / ANDROID_SDK_ROOT not found on runner." >&2
+            exit 1
+          fi
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
 
@@ -39,9 +47,14 @@ jobs:
           if [ ! -x "$SDK_MANAGER" ]; then
             SDK_MANAGER="$(find "$SDK_ROOT" -name sdkmanager -type f 2>/dev/null | head -n 1)"
           fi
+          if [ -z "$SDK_MANAGER" ] || [ ! -x "$SDK_MANAGER" ]; then
+            echo "Error: sdkmanager not found under $SDK_ROOT" >&2
+            exit 1
+          fi
 
+          echo "Using sdkmanager: $SDK_MANAGER"
           set +o pipefail
-          yes | "$SDK_MANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null
+          yes | "$SDK_MANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null || true
           set -o pipefail
 
           "$SDK_MANAGER" --sdk_root="$SDK_ROOT" --install \
@@ -49,6 +62,8 @@ jobs:
             "build-tools;36.0.0" \
             "platforms;android-36" \
             "platforms;android-36.1"
+
+          ls -la "$SDK_ROOT/platforms" "$SDK_ROOT/build-tools"
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v6
@@ -88,14 +103,26 @@ jobs:
 
       - name: Build Release APK (and AAB if signing secrets configured)
         env:
+          INPUT_TAG: ${{ inputs.tag }}
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          RELEASE_TAG="${{ inputs.tag || github.ref_name }}"
-          mkdir -p dist
+          VERSION_NAME=$(grep -oE 'versionName[[:space:]]*=[[:space:]]*"[^"]+"' app/build.gradle.kts | head -n 1 | cut -d'"' -f2)
+          VERSION_NAME="${VERSION_NAME:-0.2.0}"
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${INPUT_TAG}" ]; then
+            RELEASE_TAG="${INPUT_TAG}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          else
+            RELEASE_TAG="v${VERSION_NAME}"
+          fi
+
+          rm -rf dist && mkdir -p dist
 
           if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "Release signing secrets detected — building signed Release APK & AAB for ${RELEASE_TAG}..."
             printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > my-upload-key.jks
             export KEYSTORE_PATH="$PWD/my-upload-key.jks"
             gradle :app:assembleRelease :app:bundleRelease --no-configuration-cache --console=plain
@@ -103,21 +130,42 @@ jobs:
             cp app/build/outputs/bundle/release/app-release.aab "dist/Billuminati-${RELEASE_TAG}.aab"
             echo "BUILD_VARIANT=release" >> "$GITHUB_ENV"
           else
+            echo "No release keystore secrets configured — building directly installable signed APK for ${RELEASE_TAG}..."
             gradle :app:assembleDebug --no-configuration-cache --console=plain
             cp app/build/outputs/apk/debug/app-debug.apk "dist/Billuminati-${RELEASE_TAG}.apk"
             echo "BUILD_VARIANT=debug" >> "$GITHUB_ENV"
           fi
 
-          (cd dist && sha256sum * > SHA256SUMS.txt)
+          (cd dist && sha256sum Billuminati-* > SHA256SUMS.txt)
           echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
           ls -lh dist/
+          cat dist/SHA256SUMS.txt
+
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: billuminati-${{ env.RELEASE_TAG }}-release
+          path: dist/*
+          if-no-files-found: error
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
           name: "Billuminati ${{ env.RELEASE_TAG }}"
           generate_release_notes: true
-          make_latest: true
+          make_latest: "true"
+          body: |
+            ## Billuminati for Android (`${{ env.RELEASE_TAG }}`)
+
+            Offline-first Indian GST Tax Invoice & Billing Studio — built natively with Kotlin, Jetpack Compose, Material Design 3, and Room SQLite.
+
+            ### Direct APK Installation
+            1. Download **`Billuminati-${{ env.RELEASE_TAG }}.apk`** from the **Assets** section below.
+            2. Open the APK on your Android 7.0+ (API 24+) device and allow installing from your browser or files app if prompted.
+            3. Optionally verify the file checksum against `SHA256SUMS.txt`.
+
+            *Build variant: `${{ env.BUILD_VARIANT }}` · Commit: `${{ github.sha }}`*
           files: |
             dist/*

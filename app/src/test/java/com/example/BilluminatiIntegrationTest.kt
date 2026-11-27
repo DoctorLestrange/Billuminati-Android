@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -315,7 +316,7 @@ class BilluminatiIntegrationTest {
         }
 
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("Invoice Ledger").assertIsDisplayed()
+        composeTestRule.onNodeWithText("TOTAL BILLED").assertIsDisplayed()
         composeTestRule.onNodeWithTag("invoice_card_INV-2026-0201").assertIsDisplayed()
         composeTestRule.onNodeWithText("Zenith Traders").assertIsDisplayed()
         composeTestRule.onNodeWithTag("pdf_btn_INV-2026-0201").assertIsDisplayed()
@@ -327,7 +328,7 @@ class BilluminatiIntegrationTest {
     }
 
     @Test
-    fun catalogUi_addsNewPresetViaForm() {
+    fun catalogUi_addsNewPresetViaBottomSheet() {
         var addedName = ""
         var addedPrice = 0.0
 
@@ -344,6 +345,8 @@ class BilluminatiIntegrationTest {
             }
         }
 
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("catalog_fab_add").performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("catalog_name_input").performTextInput("Thermal Labels")
         composeTestRule.onNodeWithTag("catalog_price_input").performTextInput("590")
@@ -362,6 +365,7 @@ class BilluminatiIntegrationTest {
                 id = "ed-1",
                 invoiceNumber = "INV-2026-0301",
                 issueDate = "2026-11-21",
+                buyer = PartyDetails(companyName = "Apex Industries"),
                 items = listOf(InvoiceLineItem(id = "l1", name = "Widget", quantity = 1.0, unitPrice = 100.0))
             )
         )
@@ -381,7 +385,7 @@ class BilluminatiIntegrationTest {
                     onUpdateInvoice = { draft = it(draft) },
                     onStatusChange = {},
                     onTaxModeChange = {},
-                    onAddEmptyItem = {},
+                    onAddEmptyItem = { "new-item" },
                     onAddCatalogItem = {},
                     onRemoveItem = {},
                     onUpdateLineItem = { id, transform ->
@@ -403,5 +407,151 @@ class BilluminatiIntegrationTest {
         composeTestRule.onNodeWithTag("unsaved_discard_button").performClick()
         composeTestRule.waitForIdle()
         assertTrue(discarded)
+    }
+
+    @Test
+    fun editorUi_mobileTabsValidationAndTotalsSummaryWork() {
+        var draft by mutableStateOf(
+            Invoice(
+                id = "ed-2",
+                invoiceNumber = "INV-2026-0401",
+                issueDate = "2026-11-21",
+                isCashCustomer = false,
+                buyer = PartyDetails(companyName = ""), // Missing buyer should block save
+                items = listOf(
+                    InvoiceLineItem(
+                        id = "l1",
+                        name = "Corrugated Boxes",
+                        quantity = 10.0,
+                        unitPrice = 100.0,
+                        unitPriceInclusive = 118.0,
+                        discountAmount = 118.0,
+                        cgstPercent = 9.0,
+                        sgstPercent = 9.0,
+                        igstPercent = 18.0,
+                        taxPercent = 18.0
+                    )
+                )
+            )
+        )
+        var saved = false
+
+        composeTestRule.setContent {
+            BilluminatiTheme(darkTheme = false) {
+                InvoiceEditorScreen(
+                    invoice = draft,
+                    isCreatingNew = true,
+                    hasUnsavedChanges = true,
+                    catalog = emptyList(),
+                    isDark = false,
+                    isExpandedWidth = false,
+                    onBack = {},
+                    onDiscardAndBack = {},
+                    onUpdateInvoice = { draft = it(draft) },
+                    onStatusChange = {},
+                    onTaxModeChange = {},
+                    onAddEmptyItem = { "new-item" },
+                    onAddCatalogItem = {},
+                    onRemoveItem = {},
+                    onUpdateLineItem = { id, transform ->
+                        draft = draft.copy(items = draft.items.map { if (it.id == id) transform(it, TaxMode.CGST_SGST) else it })
+                    },
+                    onUpdateSellerLogo = {},
+                    onSave = { saved = true },
+                    onSaveAndExit = {},
+                    onSaveAndPreviewPdf = {},
+                    onShowMessage = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        // Attempting to save without buyer shows validation banner
+        composeTestRule.onNodeWithTag("editor_save_button").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("editor_validation_banner").assertIsDisplayed()
+        assertTrue(!saved)
+
+        // Switch to Totals tab and verify pre-tax discount math grand total (₹1,062.00)
+        composeTestRule.onNodeWithTag("editor_tab_totals").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("editor_grand_total_value")
+            .assertIsDisplayed()
+            .assertTextEquals("₹1,062.00")
+    }
+
+    @Test
+    fun pdfGenerator_handlesUpiOnlyBankDetailsAndHugeTermsWithoutBlankPageCrash() {
+        val upiOnlyInvoice = Invoice(
+            id = "inv-upi-1",
+            invoiceNumber = "INV-2026-0888",
+            issueDate = "2026-11-21",
+            buyer = PartyDetails(companyName = "UPI Client"),
+            bankDetails = BankDetails(
+                bankName = "", // Intentionally blank; only UPI ID populated
+                swiftOrIban = "merchant@okaxis",
+                paymentInstructions = "Pay via UPI within 7 days."
+            ),
+            items = listOf(
+                InvoiceLineItem(id = "u1", name = "Consulting", quantity = 1.0, unitPrice = 1000.0)
+            ),
+            notes = "Detailed dispatch instructions. ".repeat(40),
+            termsAndConditions = "Standard GST legal clause. ".repeat(80),
+            pdfOptions = PdfPageOptions(showBankDetails = true, showSignatureBlock = true)
+        )
+
+        val renderedPages = mutableListOf<Bitmap>()
+        val sink = object : InvoicePdfGenerator.PageSink {
+            override fun startPage(width: Int, height: Int, pageNumber: Int): android.graphics.Canvas {
+                val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                bmp.eraseColor(Color.WHITE)
+                renderedPages.add(bmp)
+                return android.graphics.Canvas(bmp)
+            }
+
+            override fun finishCurrentPage() = Unit
+        }
+
+        val pageCount = InvoicePdfGenerator.renderIntoSink(context, upiOnlyInvoice, upiOnlyInvoice.pdfOptions, sink)
+        assertTrue("Expected at least 1 rendered page, got $pageCount", pageCount >= 1)
+        assertEquals(pageCount, renderedPages.size)
+        renderedPages.forEach { it.recycle() }
+    }
+
+    @Test
+    fun logoProcessor_rejectsCorruptAndEmptyDataUrlsSafely() {
+        assertEquals(null, LogoProcessor.decodeDataUrlToBitmap(null))
+        assertEquals(null, LogoProcessor.decodeDataUrlToBitmap(""))
+        assertEquals(null, LogoProcessor.decodeDataUrlToBitmap("data:image/png;base64,not-valid-base64!!!"))
+    }
+
+    @Test
+    fun repository_getInvoiceByIdAndDefaultsOnceRoundTripCleanly(): Unit = runBlocking {
+        val defaults = BusinessDefaults(
+            defaultSeller = PartyDetails(companyName = "Atomic Corp"),
+            defaultTermsAndConditions = "Net 15"
+        )
+        repository.saveBusinessDefaults(defaults)
+        val fetchedDefaults = repository.getBusinessDefaultsOnce()
+        assertEquals("Atomic Corp", fetchedDefaults.defaultSeller.companyName)
+        assertEquals("Net 15", fetchedDefaults.defaultTermsAndConditions)
+
+        val inv = Invoice(
+            id = "point-1",
+            invoiceNumber = "INV-2026-0911",
+            issueDate = "2026-11-21",
+            buyer = PartyDetails(companyName = "Direct Read Buyer"),
+            items = listOf(InvoiceLineItem(id = "p1", name = "Unit", quantity = 1.0, unitPrice = 100.0))
+        )
+        repository.saveInvoice(inv)
+        val fetched = repository.getInvoiceById("point-1")
+        assertNotNull(fetched)
+        assertEquals("INV-2026-0911", fetched!!.invoiceNumber)
+    }
+
+    @Test
+    fun buildConfig_reflectsReleaseVersion020() {
+        assertEquals("0.2.0", BuildConfig.VERSION_NAME)
+        assertEquals(2, BuildConfig.VERSION_CODE)
     }
 }

@@ -6,12 +6,12 @@
 
 **Offline-First Indian GST Tax Invoice & Billing Studio — Built 100% Native with Kotlin & Jetpack Compose**
 
+[![Release](https://img.shields.io/badge/Release-v0.2.0-18181B?style=flat-square&logo=github)](../../releases/tag/v0.2.0)
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B%20(API%2024–36)-18181B?style=flat-square&logo=android&logoColor=white)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.4.21-18181B?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-18181B?style=flat-square&logo=jetpackcompose&logoColor=white)](https://developer.android.com/compose)
 [![Storage](https://img.shields.io/badge/Storage-Room%20SQLite%20%2B%20DataStore-18181B?style=flat-square)](https://developer.android.com/training/data-storage/room)
 [![Privacy](https://img.shields.io/badge/Permissions-Zero%20Runtime%20Permissions-065F46?style=flat-square)](#privacy--permissions)
-[![Download APK](https://img.shields.io/badge/Download-Latest%20APK-18181B?style=flat-square&logo=github)](../../releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-18181B?style=flat-square)](LICENSE)
 
 </div>
@@ -20,48 +20,53 @@
 
 ## Download APK
 
-Ready-to-install Android APKs (plus `SHA256SUMS.txt` verification checksums) are built automatically by GitHub Actions on every push to `main` and every version tag (`v*`):
+Ready-to-install Android APKs (plus `SHA256SUMS.txt` verification checksums) are built and verified automatically by GitHub Actions on every push to `main` and every version tag (`v*`):
 
-1. Open [**Releases -> Latest**](../../releases/latest).
-2. Download **`Billuminati-v1.0.apk`** onto your Android 7.0+ (API 24+) device.
+1. Open [**Releases -> v0.2.0 (Latest)**](../../releases/latest).
+2. Download **`Billuminati-v0.2.0.apk`** onto your Android 7.0+ (API 24+) device.
 3. Tap the downloaded APK to install (enable *Install unknown apps* if prompted).
 
 ---
 
 ## Overview
 
-**Billuminati** is a fast, private, completely offline Indian GST invoicing studio for native Android. Originally inspired by the [Billuminati web app](https://github.com/DoctorLestrange/Billuminati), this Android implementation is engineered from the ground up using **Kotlin**, **Jetpack Compose**, **Material Design 3**, **Room SQLite**, and the native Android **PdfDocument / PdfRenderer / PrintManager** pipeline — with no WebView or cloud lock-in.
+**Billuminati** is a fast, private, completely offline Indian GST invoicing studio for native Android. Engineered with calculation parity to the [Billuminati web app](https://github.com/DoctorLestrange/Billuminati), this Android implementation is built natively from the ground up with **Kotlin**, **Jetpack Compose**, **Material Design 3**, **Room SQLite**, and the native Android **PdfDocument / PdfRenderer / PrintManager** pipeline — with no WebView or cloud lock-in.
 
-It preserves Billuminati's signature **neutral graphite drafting-paper aesthetic** (zero blue tint in Light and Dark themes, subtle `24dp` square drafting grid, and a curated four-font editorial typography system) while adapting smoothly across phones, foldables, and tablets.
+It preserves Billuminati's signature **neutral graphite drafting-paper aesthetic** (zero blue tint in Light and Dark themes, subtle `24dp` square drafting grid, and a curated four-font editorial typography system) inside a **mobile-first Android UX** designed cleanly for narrow vertical phone screens as well as foldables and tablets.
 
 ---
 
 ## Key Features
 
-### Indian GST & Bidirectional Billing Engine
+### Accurate Indian GST & Bidirectional Billing Engine
 - **Tax Regimes**: Full support for **CGST + SGST** (intra-state), **IGST** (inter-state), and **GST Exempt** invoicing, with automatic per-slab GST breakdown summaries.
-- **Bidirectional Reverse Pricing**: Enter either a **Tax-Exclusive rate**, **Tax-Inclusive rate**, **Line Taxable Value**, or **Final Line Total** — every dependent field recalculates with penny-accurate precision, including fractional quantities (e.g., `0.5 kg`).
-- **Discounts & Round-Off**: Per-item discounts, invoice-level additional discounts (before or after tax), optional automatic ₹ round-off, and Indian numbering-system **Amount in Words** (Lakhs / Crores / Paise).
-- **Walk-In & B2B Buyers**: Instant toggle for Cash / Counter Sale invoices, 15-character GSTIN and 11-character IFSC format helpers, PO reference tracking, and payment status workflows (`Paid`, `Pending`, `Overdue`).
+- **Bidirectional Reverse Pricing**: Enter any one of **Tax-Exclusive Rate**, **Tax-Inclusive Rate**, **Line Taxable Value**, or **Final Line Total** — every dependent field recalculates with penny-accurate precision, including fractional quantities (e.g., `0.5 kg`) and 25 Indian packaging units.
+- **Pre-Tax Discount Calibration (Billuminati Web Parity)**: Per-item and invoice-level discounts are deducted from taxable value **before GST** using tax-factor calibration so that entering a ₹ discount reduces the final post-tax total by the exact entered rupee amount while keeping CGST, SGST, and IGST splits tax-compliant.
+- **Round-Off & Indian Numbering**: Optional automatic ₹ round-off and Indian numbering-system **Amount in Words** (Lakhs / Crores / Paise).
+- **Walk-In & B2B Buyers**: Instant toggle for Cash / Counter Sale invoices, 15-character GSTIN and 11-character IFSC validation hints, PO reference tracking, and payment status workflows (`Paid`, `Pending`, `Overdue`).
+
+### Mobile-First Android UX & Adaptive Layouts
+- **Compact Ledger Overview**: Clean hero revenue card with tappable `Paid`, `Pending`, and `Overdue` status counters, expandable search/filter/sort controls, date-range presets/picker, and quick actions (`Edit`, `PDF`, `Duplicate`, `Delete`).
+- **3-Tab Phone Invoice Editor**: Organized into focused **`Details` · `Items` · `Totals`** tabs on compact vertical screens with a sticky bottom Save/Total bar and a dedicated slide-up **Line Item Editor Sheet** for distraction-free item pricing.
+- **Tablet & Foldable Adaptive UI**: Automatically upgrades to a side `NavigationRail` and a two-pane Invoice Editor with a sticky live Financial Summary on expanded screens (`>= 840dp`).
+- **Unsaved-Changes Guard**: Intercepts system Back presses and navigation exits when unsaved edits exist, offering Save, Discard, or Stay.
 
 ### Native `IBM Plex Serif` PDF Studio & Printing
 - **Direct Vector PDF Generation**: Uses Android's native `PdfDocument`, `Canvas`, and `StaticLayout` — renders crisp, vector-sharp GST tax invoices strictly in **IBM Plex Serif**.
-- **Collision-Free 11-Column GST Tables**: Pre-measured `StaticLayout` pagination, wrapped seller/buyer headers, and dynamic font-fitting (`drawFittedText`) keep dense Portrait A4 GST tables legible without overlapping text.
-- **Customizable Page Studio**: Live preview with pinch-to-zoom, pan, floating zoom controls, and a slide-up sheet for paper size (`A4`, `Letter`, `Legal`), orientation (`Portrait`, `Landscape`), margin presets (`Compact`, `Standard`, `Wide`), 5 executive accent colors, column visibility toggles, signatory label, and footer note.
+- **Collision-Free GST Tables**: Pre-measured `StaticLayout` pagination, wrapped seller/buyer headers, UPI-only or full bank account blocks, and dynamic font-fitting (`drawFittedText`) keep dense Portrait A4 GST tables legible without overlapping text or blank trailing pages.
+- **Customizable Page Studio**: Live multi-page preview with pinch-to-zoom, pan, floating zoom controls, and a slide-up sheet for paper size (`A4`, `Letter`, `Legal`), orientation (`Portrait`, `Landscape`), margin presets (`Compact`, `Standard`, `Wide`), 5 executive accent colors, column visibility toggles, signatory label, and footer note.
 - **Native Export & Printing**: Save directly via Android's Storage Access Framework (`CreateDocument`), share through sandboxed `FileProvider`, or print straight to wireless/PDF printers via `PrintManager`.
 
-### Offline-First Ledger, Catalog & Portable Backups
-- **Local Room SQLite + DataStore**: All invoices, reusable SKU/HSN catalog presets, seller profile defaults, and theme preferences live privately on device.
-- **Tappable KPI Dashboard**: Instant revenue volume, paid, pending, and overdue counters (with auto-scaling for large Crore figures), search, status filter chips, date-range presets/picker, and multi-criteria sorting.
-- **Cross-Platform JSON Backup & Restore**: Export and import portable JSON backups compatible with Billuminati web data, supporting safe **Merge** or confirmation-guarded **Replace All** workflows (via file picker or pasted JSON).
-- **Adaptive Layouts**: Phone bottom navigation + tablet `NavigationRail` and two-pane Invoice Editor with a sticky Financial Summary on expanded screens (`>= 840dp`).
-- **Seller Logo Studio**: Pick any business logo via the zero-permission Android Photo Picker; automatically handles EXIF rotation and normalizes to a crisp `512×512` square PNG embedded in invoices and backups.
+### Offline-First Storage, Catalog & Portable Backups
+- **Local Room SQLite + DataStore**: All invoices, reusable HSN/SKU catalog presets, and default seller/bank profiles live locally in Room SQLite; theme and onboarding preferences live in Jetpack DataStore.
+- **Cross-Platform JSON Backup & Restore**: Export and import portable JSON backups compatible with Billuminati Web (gracefully handling explicit `null` fields), supporting atomic transactional **Merge** or confirmation-guarded **Replace All** workflows via file picker or pasted JSON.
+- **Seller Logo Studio**: Pick any business logo via the zero-permission Android Photo Picker; validates image signatures, handles EXIF orientation safely against OOM, and normalizes to a crisp `512×512` square PNG embedded in invoices and backups.
 
 ---
 
 ## Architecture
 
-Billuminati follows **MVVM + Clean Layer Separation** with unidirectional state flow (`StateFlow` + `collectAsStateWithLifecycle`) and zero third-party DI bloat.
+Billuminati follows **MVVM + Clean Layer Separation** with unidirectional state flow (`StateFlow` + `collectAsStateWithLifecycle`) and constructor injection without heavy DI frameworks.
 
 ```text
 app/src/main/java/com/example/
@@ -70,37 +75,37 @@ app/src/main/java/com/example/
 │   ├── model/
 │   │   └── BillingModels.kt         # Moshi-annotated domain models, GST enums, PDF page options
 │   └── engine/
-│       └── BillingEngine.kt         # Pure Kotlin GST math, bidirectional pricing, INR words, filtering & sorting
+│       └── BillingEngine.kt         # Pure Kotlin GST math, pre-tax discount calibration, INR words, filter & sort
 ├── data/
 │   ├── local/
 │   │   ├── BilluminatiDatabase.kt   # Room SQLite database & Moshi type converters
-│   │   ├── BilluminatiDao.kt        # Reactive Flow queries & atomic transactional backup import
-│   │   ├── BilluminatiEntities.kt   # InvoiceEntity & CatalogItemEntity schemas
-│   │   └── PreferencesStore.kt      # Jetpack DataStore for business defaults & Light/Dark theme
+│   │   ├── BilluminatiDao.kt        # Reactive Flow queries, point reads & @Transaction backup import
+│   │   ├── BilluminatiEntities.kt   # InvoiceEntity, CatalogItemEntity & BusinessDefaultsEntity schemas
+│   │   └── PreferencesStore.kt      # Jetpack DataStore for Light/Dark theme & onboarding preferences
 │   ├── backup/
-│   │   └── BackupSerializer.kt      # Portable JSON serializer/deserializer (Billuminati Web compatible)
+│   │   └── BackupSerializer.kt      # Null-tolerant JSON serializer/deserializer (Billuminati Web compatible)
 │   └── repository/
 │       └── BilluminatiRepository.kt # Single source of truth coordinating Room & DataStore
 ├── service/
 │   ├── InvoicePdfGenerator.kt       # Native PdfDocument + StaticLayout vector GST invoice renderer
 │   ├── PdfExportHelper.kt           # PdfRenderer page rasterization, FileProvider sharing & PrintManager
-│   └── LogoProcessor.kt             # Streaming OOM-safe decode, EXIF normalization & 512px square PNG encoder
+│   └── LogoProcessor.kt             # Signature-checked, OOM-safe EXIF decode & 512px square PNG encoder
 └── ui/
-    ├── theme/                       # Neutral graphite ColorScheme, 4-font Typography (Plus Jakarta Sans, Lora, JetBrains Mono, IBM Plex Serif)
+    ├── theme/                       # Neutral graphite ColorScheme & 4-font Typography (Plus Jakarta Sans, Lora, JetBrains Mono, IBM Plex Serif)
     ├── viewmodel/
-    │   └── BilluminatiViewModel.kt  # Unidirectional UI state, unsaved-change tracking, monotonic IDs
+    │   └── BilluminatiViewModel.kt  # Unidirectional UI state, mutex-guarded saves, monotonic invoice numbering
     ├── components/
-    │   ├── CommonComponents.kt      # 24dp drafting grid canvas, read-only picker fields, numeric inputs, status badges
-    │   └── LineItemCard.kt          # Bidirectional line-item editor card with packaging & GST inputs
+    │   ├── CommonComponents.kt      # Section cards, focus-safe numeric inputs, date picker, status badges, Welcome dialog
+    │   └── LineItemCard.kt          # Compact line-item summary card & bidirectional Line Item Editor bottom sheet
     └── screens/
-        ├── DashboardScreen.kt       # KPI cards, search/filter/sort controls, invoice ledger
-        ├── InvoiceEditorScreen.kt   # Adaptive 1-pane / 2-pane editor with unsaved-changes guard
-        ├── EditorSections.kt        # Seller, Buyer, Bank, Payment, Notes & Terms sections
-        ├── EditorSummaryCard.kt     # Live GST slab & Grand Total breakdown card
-        ├── PdfPreviewScreen.kt      # Pinch-zoom / scroll-safe multi-page preview & Print/Save/Share bar
-        ├── PdfSettingsSheet.kt      # Debounced PDF paper, margin, accent & visibility controls
+        ├── DashboardScreen.kt       # Compact KPI ledger overview, collapsible filter bar, invoice cards
+        ├── InvoiceEditorScreen.kt   # 3-tab mobile editor / 2-pane tablet editor with validation & Back guard
+        ├── EditorSections.kt        # Seller, Buyer, Bank, Payment, Notes & Terms editor cards
+        ├── EditorSummaryCard.kt     # Live GST slab breakdown, pre-tax discount & Grand Total card
+        ├── PdfPreviewScreen.kt      # Pinch-zoom multi-page preview, retry handling & Save/Share/Print bar
+        ├── PdfSettingsSheet.kt      # Atomic PDF paper, orientation, margin, accent & column controls
         ├── CatalogScreen.kt         # Reusable HSN/SKU product & packaging presets manager
-        └── SettingsScreen.kt        # Business defaults, seller logo & JSON Backup/Restore tabs
+        └── SettingsScreen.kt        # Business Profile, Seller Logo, JSON Backup/Restore & About version card
 ```
 
 ---
@@ -119,7 +124,7 @@ app/src/main/java/com/example/
 | **PDF & Printing** | Android `PdfDocument`, `PdfRenderer`, `PrintManager`, `FileProvider` |
 | **Typography** | Local `.ttf` bundles: `Plus Jakarta Sans`, `Lora`, `JetBrains Mono`, `IBM Plex Serif` |
 | **Testing** | JUnit 4, Robolectric `4.16.1`, Compose UI Test, Coroutines Test |
-| **Build System** | Android Gradle Plugin `9.1.1` (Kotlin DSL + Version Catalog) |
+| **Build System** | Android Gradle Plugin `9.1.1` + Gradle `9.3.1` (Kotlin DSL + Version Catalog) |
 
 ---
 
@@ -127,8 +132,8 @@ app/src/main/java/com/example/
 
 ### Prerequisites
 - **Android Studio** Ladybug / Meerkat or newer
-- **JDK 17** or **JDK 21** (Java 11 bytecode target)
-- **Android SDK 36** (`compileSdk = 36`, `targetSdk = 36`, `minSdk = 24`)
+- **JDK 21** (Java 11 bytecode target)
+- **Android SDK 36.1** (`compileSdk = 36` minor 1, `targetSdk = 36`, `minSdk = 24`)
 
 ### Clone & Build
 
@@ -137,7 +142,7 @@ git clone https://github.com/DoctorLestrange/Billuminati.git
 cd Billuminati
 ```
 
-If `debug.keystore` is not present locally (it is gitignored), decode the bundled debug keystore or generate a local one:
+If `debug.keystore` is not present locally (it is gitignored), decode the bundled debug keystore:
 
 ```bash
 base64 -d debug.keystore.base64 > debug.keystore
@@ -153,7 +158,7 @@ gradle :app:assembleDebug
 
 ### Run Tests & Lint
 
-Billuminati includes fast JVM unit tests, Room persistence & backup tests, logo encoding tests, native PDF pagination tests, and Compose UI tests via Robolectric — no emulator required:
+Billuminati includes 30+ fast JVM unit tests, Room persistence & backup tests, logo validation tests, native PDF pagination tests, and Compose UI tests via Robolectric — no emulator required:
 
 ```bash
 # Run all unit & Robolectric integration/UI tests
@@ -186,9 +191,9 @@ gradle :app:lintDebug
    gradle :app:assembleRelease
    ```
 
-> **Automated GitHub Releases**: Every push to `main` (and every `v*` tag) automatically publishes a directly installable APK to **GitHub Releases**. To sign those automated releases with your production upload key (and also publish an `.aab` bundle), add `RELEASE_KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` under **Settings -> Secrets and variables -> Actions**.
+> **Automated GitHub Releases**: Every push to `main` automatically tags and publishes a directly installable APK (`Billuminati-v<versionName>.apk`) and `SHA256SUMS.txt` under **GitHub Releases** (currently **`v0.2.0`**). Pushing a version tag (`v*`) or triggering the **Tagged Release APK & AAB** workflow manually also builds and publishes the release. To sign automated releases with your production upload key (and also publish an `.aab` bundle), add `RELEASE_KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` under **Settings -> Secrets and variables -> Actions**.
 
-> **Note on Play Store Publishing**: Before publishing to Google Play, update `applicationId` in `app/build.gradle.kts` to your own reverse-domain package identifier (e.g., `com.yourorg.billuminati`) and optionally enable `isMinifyEnabled = true` (`app/proguard-rules.pro` already includes keep rules for Moshi adapters, domain models, and Room).
+> **Note on Play Store Publishing**: The project uses `applicationId = "com.aistudio.billuminati.gstapp"`. Before publishing to your own Google Play Console account, customize `applicationId` in `app/build.gradle.kts` to your reverse-domain package identifier (e.g., `com.yourorg.billuminati`) and optionally enable `isMinifyEnabled = true` (`app/proguard-rules.pro` already includes keep rules for Moshi adapters, domain models, and Room).
 
 ---
 
@@ -201,7 +206,7 @@ Billuminati is designed for **zero-permission, offline-first privacy**:
 | Logo Selection | `ActivityResultContracts.PickVisualMedia` (Android Photo Picker) | **None** |
 | Save PDF / Export JSON | `ActivityResultContracts.CreateDocument` (SAF) | **None** |
 | Import JSON Backup | `ActivityResultContracts.OpenDocument` (SAF) | **None** |
-| Share PDF | `androidx.core.content.FileProvider` (cache sandbox) | **None** |
+| Share PDF / JSON | `androidx.core.content.FileProvider` (cache sandbox) | **None** |
 | Print Invoice | `android.print.PrintManager` | **None** |
 | Network / Analytics | None (100% offline) | **None** |
 

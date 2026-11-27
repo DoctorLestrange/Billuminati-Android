@@ -336,32 +336,28 @@ object BillingEngine {
         calculateDiscountOnFinalValue: Boolean = true
     ): InvoiceLineItem {
         val safeFinal = max(0.0, if (targetFinalTotal.isFinite()) targetFinalTotal else 0.0)
-        val qty = if (item.quantity.isFinite() && item.quantity > 0.0) item.quantity else 1.0
-        val discountRupees = max(0.0, if (item.discountAmount.isFinite()) item.discountAmount else 0.0)
         val rates = getEffectiveLineTaxRates(item, taxMode)
         val taxMultiplier = 1.0 + rates.totalTaxPercent / 100.0
-
-        return if (calculateDiscountOnFinalValue) {
-            val grossFinalNeeded = safeFinal + discountRupees
-            val newInclUnitPrice = roundRate(grossFinalNeeded / qty)
-            val newExclUnitPrice = roundRate(newInclUnitPrice / taxMultiplier)
-            item.copy(
-                priceEntryMode = PriceEntryMode.INCLUSIVE.code,
-                unitPrice = newExclUnitPrice,
-                unitPriceInclusive = roundCurrency(newInclUnitPrice)
-            )
-        } else {
-            val taxableNeeded = safeFinal / taxMultiplier
-            val grossMerchNeeded = taxableNeeded + discountRupees
-            val newExclUnitPrice = roundRate(grossMerchNeeded / qty)
-            val newInclUnitPrice = roundCurrency(newExclUnitPrice * taxMultiplier)
-            item.copy(
-                priceEntryMode = PriceEntryMode.EXCLUSIVE.code,
-                unitPrice = newExclUnitPrice,
-                unitPriceInclusive = newInclUnitPrice
-            )
-        }
+        val targetTaxable = safeFinal / taxMultiplier
+        return updateItemFromTaxableValue(
+            item = item,
+            targetTaxableValue = targetTaxable,
+            taxMode = taxMode,
+            calculateDiscountOnFinalValue = calculateDiscountOnFinalValue
+        )
     }
+
+    fun updateItemFromLineTotalInclusive(
+        item: InvoiceLineItem,
+        targetLineTotalInclusive: Double,
+        taxMode: TaxMode,
+        calculateDiscountOnFinalValue: Boolean = true
+    ): InvoiceLineItem = updateItemFromFinalTotal(
+        item = item,
+        targetFinalTotal = targetLineTotalInclusive,
+        taxMode = taxMode,
+        calculateDiscountOnFinalValue = calculateDiscountOnFinalValue
+    )
 
     fun updateItemTaxRates(
         item: InvoiceLineItem,
@@ -370,18 +366,27 @@ object BillingEngine {
         igst: Double = item.igstPercent,
         taxMode: TaxMode
     ): InvoiceLineItem {
-        val safeCgst = min(100.0, max(0.0, if (cgst.isFinite()) cgst else 0.0))
-        val safeSgst = min(100.0, max(0.0, if (sgst.isFinite()) sgst else 0.0))
-        val safeIgst = min(100.0, max(0.0, if (igst.isFinite()) igst else 0.0))
+        var safeCgst = min(100.0, max(0.0, if (cgst.isFinite()) cgst else 0.0))
+        var safeSgst = min(100.0, max(0.0, if (sgst.isFinite()) sgst else 0.0))
+        var safeIgst = min(100.0, max(0.0, if (igst.isFinite()) igst else 0.0))
         val total = when (taxMode) {
-            TaxMode.CGST_SGST -> roundCurrency(safeCgst + safeSgst)
-            TaxMode.IGST -> safeIgst
+            TaxMode.CGST_SGST -> {
+                val sum = roundCurrency(safeCgst + safeSgst)
+                safeIgst = sum
+                sum
+            }
+            TaxMode.IGST -> {
+                val sum = roundCurrency(safeIgst)
+                safeCgst = roundCurrency(safeIgst / 2.0)
+                safeSgst = roundCurrency(safeIgst - safeCgst)
+                sum
+            }
             TaxMode.EXEMPT -> 0.0
         }
         val updated = item.copy(
             cgstPercent = safeCgst,
             sgstPercent = safeSgst,
-            igstPercent = if (taxMode == TaxMode.IGST) safeIgst else roundCurrency(safeCgst + safeSgst),
+            igstPercent = safeIgst,
             taxPercent = total
         )
         return if (PriceEntryMode.fromCode(updated.priceEntryMode) == PriceEntryMode.INCLUSIVE) {
@@ -397,10 +402,11 @@ object BillingEngine {
         taxMode: TaxMode
     ): InvoiceLineItem {
         val half = roundCurrency(slabRate / 2.0)
+        val otherHalf = roundCurrency(slabRate - half)
         return updateItemTaxRates(
             item = item,
             cgst = half,
-            sgst = half,
+            sgst = otherHalf,
             igst = slabRate,
             taxMode = taxMode
         )
@@ -543,7 +549,8 @@ object BillingEngine {
             additionalPreTaxDiscountAmount = roundCurrency(max(0.0, lineTaxableSubtotal - taxableSubtotal))
         }
 
-        val grandTotal = if (invoice.roundOff) round(rawGrandTotal) else rawGrandTotal
+        // Standard half-up rounding matching JS Math.round (avoids Kotlin banker's rounding)
+        val grandTotal = if (invoice.roundOff) floor(rawGrandTotal + 0.5 + EPSILON) else rawGrandTotal
         val roundOffAdjustment = if (invoice.roundOff) roundCurrency(grandTotal - rawGrandTotal) else 0.0
 
         return InvoiceSummaryCalculation(
@@ -583,13 +590,59 @@ object BillingEngine {
         )
     }
 
+    fun formatPackagePlural(type: String, count: Double): String {
+        if (count == 1.0 || type.equals("Dozen", ignoreCase = true)) return type
+        val lower = type.lowercase(Locale.US)
+        if (lower.endsWith("x") || lower.endsWith("s") || lower.endsWith("ch") || lower.endsWith("sh")) {
+            return "${type}es"
+        }
+        return "${type}s"
+    }
+
+    fun formatTaxModeLabel(taxMode: String): String = when (TaxMode.fromCode(taxMode)) {
+        TaxMode.CGST_SGST -> "CGST + SGST"
+        TaxMode.IGST -> "IGST"
+        TaxMode.EXEMPT -> "GST Exempt (0%)"
+    }
+
+    data class ItemNameTypography(
+        val isLong: Boolean,
+        val isVeryLong: Boolean,
+        val pdfFontSizePt: Float,
+        val pdfLineHeightMm: Float
+    )
+
+    fun getItemNameTypography(name: String, maxSingleLineChars: Int = 28): ItemNameTypography {
+        val len = name.trim().length
+        return when {
+            len > 56 -> ItemNameTypography(
+                isLong = true,
+                isVeryLong = true,
+                pdfFontSizePt = 6.4f,
+                pdfLineHeightMm = 3.1f
+            )
+            len > maxSingleLineChars -> ItemNameTypography(
+                isLong = true,
+                isVeryLong = false,
+                pdfFontSizePt = 6.9f,
+                pdfLineHeightMm = 3.3f
+            )
+            else -> ItemNameTypography(
+                isLong = false,
+                isVeryLong = false,
+                pdfFontSizePt = 7.8f,
+                pdfLineHeightMm = 3.7f
+            )
+        }
+    }
+
     /**
      * Formats INR amounts using exact Indian numbering grouping (e.g. ₹1,23,456.78).
      */
     fun formatCurrency(amount: Double): String {
         val bounded = (if (amount.isFinite()) amount else 0.0)
             .coerceIn(-9_999_999_999_999.99, 9_999_999_999_999.99)
-        val safe = roundCurrency(bounded)
+        val safe = roundCurrency(bounded).let { if (abs(it) < 0.005) 0.0 else it }
         val negative = safe < 0.0
         val absVal = abs(safe)
         val totalPaise = (absVal * 100.0).roundToLong()
@@ -895,20 +948,23 @@ object BillingEngine {
         val status = InvoiceStatus.fromLabel(raw.status)
         val isPaid = status == InvoiceStatus.PAID
 
+        val seenItemIds = HashSet<String>()
         val normalizedItems = raw.items.mapIndexed { idx, item ->
             val baseTax = min(100.0, max(0.0, if (item.taxPercent.isFinite()) item.taxPercent else 0.0))
-            val cgst = if (item.cgstPercent.isFinite() && (item.cgstPercent > 0.0 || baseTax == 0.0)) {
-                item.cgstPercent
+            val hasExplicitSplit = item.cgstPercent.isFinite() && item.sgstPercent.isFinite() &&
+                (item.cgstPercent > 0.0 || item.sgstPercent > 0.0 || baseTax == 0.0)
+            val cgst = if (hasExplicitSplit) {
+                min(100.0, max(0.0, item.cgstPercent))
             } else {
                 roundCurrency(baseTax / 2.0)
             }
-            val sgst = if (item.sgstPercent.isFinite() && (item.sgstPercent > 0.0 || baseTax == 0.0)) {
-                item.sgstPercent
+            val sgst = if (hasExplicitSplit) {
+                min(100.0, max(0.0, item.sgstPercent))
             } else {
-                roundCurrency(baseTax / 2.0)
+                roundCurrency(baseTax - cgst)
             }
             val igst = if (item.igstPercent.isFinite() && (item.igstPercent > 0.0 || baseTax == 0.0)) {
-                item.igstPercent
+                min(100.0, max(0.0, item.igstPercent))
             } else {
                 baseTax
             }
@@ -918,11 +974,14 @@ object BillingEngine {
                 TaxMode.EXEMPT -> 0.0
             }
             val qty = max(0.0, if (item.quantity.isFinite()) item.quantity else 1.0)
-            val unitPrice = max(0.0, if (item.unitPrice.isFinite()) item.unitPrice else 0.0)
+            var unitPrice = max(0.0, if (item.unitPrice.isFinite()) item.unitPrice else 0.0)
             val unitPriceInclusive = if (item.unitPriceInclusive.isFinite() && item.unitPriceInclusive > 0.0) {
                 item.unitPriceInclusive
             } else {
                 roundCurrency(unitPrice * (1.0 + effectiveRate / 100.0))
+            }
+            if (unitPrice == 0.0 && unitPriceInclusive > 0.0) {
+                unitPrice = roundRate(unitPriceInclusive / (1.0 + effectiveRate / 100.0))
             }
 
             val discountAmount = when {
@@ -934,8 +993,16 @@ object BillingEngine {
                 else -> 0.0
             }
 
+            val baseId = item.id.trim().ifBlank { "item-${System.currentTimeMillis()}-$fallbackIndex-$idx" }
+            var uniqueId = baseId
+            var suffix = 1
+            while (!seenItemIds.add(uniqueId)) {
+                uniqueId = "$baseId-$suffix"
+                suffix++
+            }
+
             item.copy(
-                id = item.id.ifBlank { "item-${System.currentTimeMillis()}-$fallbackIndex-$idx" },
+                id = uniqueId,
                 packagingType = PackagingType.fromLabel(item.packagingType).label,
                 unitsPerPackage = 1,
                 packageCount = qty,
@@ -949,7 +1016,7 @@ object BillingEngine {
                 cgstPercent = cgst,
                 sgstPercent = sgst,
                 igstPercent = igst,
-                taxPercent = effectiveRate
+                taxPercent = if (taxMode == TaxMode.EXEMPT) 0.0 else effectiveRate
             )
         }
 

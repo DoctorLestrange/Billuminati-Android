@@ -84,25 +84,32 @@ class BackupSerializer {
      * 3) Single invoice JSON object { "invoiceNumber": "...", "items": [...] }
      */
     fun validateAndParseBackupJson(rawJson: String): BackupParseResult {
+        if (rawJson.length > MAX_BACKUP_CHARS) {
+            return BackupParseResult.Error("Backup file exceeds the 25 MB safety limit.")
+        }
         val trimmed = rawJson.trim()
         if (trimmed.isEmpty()) {
             return BackupParseResult.Error("JSON content is empty.")
         }
 
         return try {
-            val root = anyAdapter.fromJson(trimmed)
+            val rawRoot = anyAdapter.fromJson(trimmed)
+                ?: return BackupParseResult.Error("JSON file does not contain a valid object or array.")
+            val root = stripNullEntries(rawRoot)
                 ?: return BackupParseResult.Error("JSON file does not contain a valid object or array.")
 
             when (root) {
                 is List<*> -> {
                     validateRawInvoiceList(root)?.let { return BackupParseResult.Error(it) }
-                    val invoices = invoiceListAdapter.fromJson(trimmed)
+                    val invoices = invoiceListAdapter.fromJsonValue(root)
                         ?: return BackupParseResult.Error("Could not decode invoices array.")
                     BackupParseResult.Success(
                         BilluminatiBackup(
-                            invoices = invoices.mapIndexed { idx, inv ->
-                                BillingEngine.normalizeInvoiceRecord(inv, idx)
-                            }
+                            invoices = deduplicateInvoices(
+                                invoices.mapIndexed { idx, inv ->
+                                    BillingEngine.normalizeInvoiceRecord(inv, idx)
+                                }
+                            )
                         )
                     )
                 }
@@ -111,15 +118,21 @@ class BackupSerializer {
                     when {
                         rawInvoices is List<*> -> {
                             validateRawInvoiceList(rawInvoices)?.let { return BackupParseResult.Error(it) }
-                            val parsedBackup = backupAdapter.fromJson(trimmed)
+                            val parsedBackup = backupAdapter.fromJsonValue(root)
                                 ?: return BackupParseResult.Error("Could not decode Billuminati backup.")
                             BackupParseResult.Success(
                                 parsedBackup.copy(
-                                    invoices = parsedBackup.invoices.mapIndexed { idx, inv ->
-                                        BillingEngine.normalizeInvoiceRecord(inv, idx)
-                                    },
-                                    catalog = parsedBackup.catalog?.mapIndexed { idx, cat ->
-                                        BillingEngine.normalizeCatalogItem(cat, idx)
+                                    invoices = deduplicateInvoices(
+                                        parsedBackup.invoices.mapIndexed { idx, inv ->
+                                            BillingEngine.normalizeInvoiceRecord(inv, idx)
+                                        }
+                                    ),
+                                    catalog = parsedBackup.catalog?.let { rawCat ->
+                                        deduplicateCatalog(
+                                            rawCat.mapIndexed { idx, cat ->
+                                                BillingEngine.normalizeCatalogItem(cat, idx)
+                                            }
+                                        )
                                     }
                                 )
                             )
@@ -129,7 +142,7 @@ class BackupSerializer {
                             if (invNumber.isBlank()) {
                                 return BackupParseResult.Error("Invoice is missing a valid invoiceNumber.")
                             }
-                            val single = invoiceAdapter.fromJson(trimmed)
+                            val single = invoiceAdapter.fromJsonValue(root)
                                 ?: return BackupParseResult.Error("Could not decode invoice object.")
                             BackupParseResult.Success(
                                 BilluminatiBackup(
@@ -149,6 +162,55 @@ class BackupSerializer {
         }
     }
 
+    /**
+     * Recursively removes explicit JSON `null` values from objects and arrays so Moshi's generated
+     * Kotlin adapters fall back to Kotlin default values instead of throwing JsonDataException
+     * on real-world web exports that contain `null` fields (e.g. `"notes": null`).
+     */
+    private fun stripNullEntries(value: Any?): Any? = when (value) {
+        null -> null
+        is Map<*, *> -> {
+            val cleaned = LinkedHashMap<Any?, Any?>()
+            for ((k, v) in value) {
+                if (v != null) {
+                    val sanitized = stripNullEntries(v)
+                    if (sanitized != null) {
+                        cleaned[k] = sanitized
+                    }
+                }
+            }
+            cleaned
+        }
+        is List<*> -> value.mapNotNull { stripNullEntries(it) }
+        else -> value
+    }
+
+    private fun deduplicateInvoices(invoices: List<Invoice>): List<Invoice> {
+        val seenIds = HashSet<String>()
+        return invoices.map { inv ->
+            var id = inv.id
+            var suffix = 1
+            while (!seenIds.add(id)) {
+                id = "${inv.id}-$suffix"
+                suffix++
+            }
+            if (id == inv.id) inv else inv.copy(id = id)
+        }
+    }
+
+    private fun deduplicateCatalog(items: List<CatalogItem>): List<CatalogItem> {
+        val seenIds = HashSet<String>()
+        return items.map { item ->
+            var id = item.id
+            var suffix = 1
+            while (!seenIds.add(id)) {
+                id = "${item.id}-$suffix"
+                suffix++
+            }
+            if (id == item.id) item else item.copy(id = id)
+        }
+    }
+
     private fun validateRawInvoiceList(list: List<*>): String? {
         for (i in list.indices) {
             val entry = list[i] as? Map<*, *>
@@ -162,5 +224,9 @@ class BackupSerializer {
             }
         }
         return null
+    }
+
+    companion object {
+        private const val MAX_BACKUP_CHARS = 25 * 1024 * 1024
     }
 }

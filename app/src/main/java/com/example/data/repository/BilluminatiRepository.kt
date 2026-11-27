@@ -60,6 +60,30 @@ class BilluminatiRepository(
 
     val preferencesFlow: Flow<AppPreferences> = preferencesStore.preferencesFlow
 
+    suspend fun getAllInvoicesOnce(): List<Invoice> =
+        dao.getAllInvoicesOnce().mapIndexedNotNull { idx, entity ->
+            serializer.invoiceFromJson(entity.payloadJson)?.let {
+                BillingEngine.normalizeInvoiceRecord(it, idx)
+            }
+        }
+
+    suspend fun getInvoiceById(id: String): Invoice? {
+        val entity = dao.getInvoiceById(id) ?: return null
+        return serializer.invoiceFromJson(entity.payloadJson)?.let {
+            BillingEngine.normalizeInvoiceRecord(it)
+        }
+    }
+
+    suspend fun getBusinessDefaultsOnce(): BusinessDefaults {
+        val entity = dao.getBusinessDefaultsOnce() ?: return BusinessDefaults()
+        return BusinessDefaults(
+            defaultSeller = serializer.sellerFromJson(entity.sellerJson),
+            defaultBank = serializer.bankFromJson(entity.bankJson),
+            defaultPdfOptions = serializer.pdfOptionsFromJson(entity.pdfOptionsJson),
+            defaultTermsAndConditions = entity.defaultTermsAndConditions
+        )
+    }
+
     suspend fun saveInvoice(invoice: Invoice) {
         val normalized = BillingEngine.normalizeInvoiceRecord(invoice)
         dao.upsertInvoice(normalized.toEntity())
@@ -85,15 +109,7 @@ class BilluminatiRepository(
     }
 
     suspend fun saveBusinessDefaults(defaults: BusinessDefaults) {
-        dao.upsertBusinessDefaults(
-            BusinessDefaultsEntity(
-                id = 1,
-                sellerJson = serializer.sellerToJson(defaults.defaultSeller),
-                bankJson = serializer.bankToJson(defaults.defaultBank),
-                pdfOptionsJson = serializer.pdfOptionsToJson(defaults.defaultPdfOptions),
-                defaultTermsAndConditions = defaults.defaultTermsAndConditions
-            )
-        )
+        dao.upsertBusinessDefaults(defaults.toEntity())
     }
 
     suspend fun importBackup(
@@ -104,31 +120,31 @@ class BilluminatiRepository(
         val normalizedInvoices = backup.invoices.mapIndexed { idx, inv ->
             BillingEngine.normalizeInvoiceRecord(inv, idx).toEntity()
         }
-        if (replaceExisting) {
-            dao.replaceAllInvoices(normalizedInvoices)
-        } else if (normalizedInvoices.isNotEmpty()) {
-            dao.upsertInvoices(normalizedInvoices)
-        }
-
         val updatedDefaults = BusinessDefaults(
             defaultSeller = backup.defaultSeller ?: currentDefaults.defaultSeller,
             defaultBank = backup.defaultBank ?: currentDefaults.defaultBank,
             defaultPdfOptions = backup.defaultPdfOptions ?: currentDefaults.defaultPdfOptions,
             defaultTermsAndConditions = backup.defaultTermsAndConditions ?: currentDefaults.defaultTermsAndConditions
         )
-        saveBusinessDefaults(updatedDefaults)
-
-        backup.catalog?.let { incomingCatalog ->
-            val entities = incomingCatalog.mapIndexed { idx, item ->
-                BillingEngine.normalizeCatalogItem(item, idx).toEntity()
-            }
-            if (replaceExisting) {
-                dao.replaceCatalog(entities)
-            } else if (entities.isNotEmpty()) {
-                dao.upsertCatalogItems(entities)
-            }
+        val catalogEntities = backup.catalog?.mapIndexed { idx, item ->
+            BillingEngine.normalizeCatalogItem(item, idx).toEntity()
         }
+
+        dao.importBackupAtomic(
+            replaceExisting = replaceExisting,
+            invoices = normalizedInvoices,
+            defaults = updatedDefaults.toEntity(),
+            catalog = catalogEntities
+        )
     }
+
+    private fun BusinessDefaults.toEntity(): BusinessDefaultsEntity = BusinessDefaultsEntity(
+        id = 1,
+        sellerJson = serializer.sellerToJson(defaultSeller),
+        bankJson = serializer.bankToJson(defaultBank),
+        pdfOptionsJson = serializer.pdfOptionsToJson(defaultPdfOptions),
+        defaultTermsAndConditions = defaultTermsAndConditions
+    )
 
     suspend fun setDarkTheme(isDark: Boolean) = preferencesStore.setDarkTheme(isDark)
     suspend fun markWelcomeSeen() = preferencesStore.markWelcomeSeen()

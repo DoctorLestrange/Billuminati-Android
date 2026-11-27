@@ -13,6 +13,12 @@ interface BilluminatiDao {
     @Query("SELECT * FROM invoices ORDER BY issueDate DESC, invoiceNumber DESC")
     fun observeInvoices(): Flow<List<InvoiceEntity>>
 
+    @Query("SELECT * FROM invoices ORDER BY issueDate DESC, invoiceNumber DESC")
+    suspend fun getAllInvoicesOnce(): List<InvoiceEntity>
+
+    @Query("SELECT * FROM invoices WHERE id = :id LIMIT 1")
+    suspend fun getInvoiceById(id: String): InvoiceEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertInvoice(invoice: InvoiceEntity)
 
@@ -59,6 +65,33 @@ interface BilluminatiDao {
     @Query("SELECT * FROM business_defaults WHERE id = 1 LIMIT 1")
     fun observeBusinessDefaults(): Flow<BusinessDefaultsEntity?>
 
+    @Query("SELECT * FROM business_defaults WHERE id = 1 LIMIT 1")
+    suspend fun getBusinessDefaultsOnce(): BusinessDefaultsEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertBusinessDefaults(defaults: BusinessDefaultsEntity)
+
+    @Transaction
+    suspend fun importBackupAtomic(
+        replaceExisting: Boolean,
+        invoices: List<InvoiceEntity>,
+        defaults: BusinessDefaultsEntity,
+        catalog: List<CatalogItemEntity>?
+    ) {
+        if (replaceExisting) {
+            clearAllInvoices()
+        }
+        if (invoices.isNotEmpty()) {
+            upsertInvoices(invoices)
+        }
+        upsertBusinessDefaults(defaults)
+        if (catalog != null) {
+            if (replaceExisting) {
+                clearCatalog()
+            }
+            if (catalog.isNotEmpty()) {
+                upsertCatalogItems(catalog)
+            }
+        }
+    }
 }

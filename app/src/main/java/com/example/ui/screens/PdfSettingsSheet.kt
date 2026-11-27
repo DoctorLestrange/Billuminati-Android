@@ -58,7 +58,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun PdfSettingsBottomSheet(
     invoice: Invoice,
-    onUpdateOptions: (PdfPageOptions) -> Unit,
+    onUpdateOptions: ((PdfPageOptions) -> PdfPageOptions) -> Unit,
     onUploadLogo: () -> Unit,
     onRemoveLogo: () -> Unit,
     onDismiss: () -> Unit
@@ -76,13 +76,16 @@ fun PdfSettingsBottomSheet(
             footerNote != opts.footerNote
         ) {
             delay(300)
-            onUpdateOptions(
-                opts.copy(
-                    headerTitle = headerTitle,
-                    signatoryLabel = signatoryLabel,
-                    footerNote = footerNote
+            val latestHeader = headerTitle
+            val latestSignatory = signatoryLabel
+            val latestFooter = footerNote
+            onUpdateOptions { current ->
+                current.copy(
+                    headerTitle = latestHeader,
+                    signatoryLabel = latestSignatory,
+                    footerNote = latestFooter
                 )
-            )
+            }
         }
     }
 
@@ -91,13 +94,16 @@ fun PdfSettingsBottomSheet(
             signatoryLabel != opts.signatoryLabel ||
             footerNote != opts.footerNote
         ) {
-            onUpdateOptions(
-                opts.copy(
-                    headerTitle = headerTitle,
-                    signatoryLabel = signatoryLabel,
-                    footerNote = footerNote
+            val latestHeader = headerTitle
+            val latestSignatory = signatoryLabel
+            val latestFooter = footerNote
+            onUpdateOptions { current ->
+                current.copy(
+                    headerTitle = latestHeader,
+                    signatoryLabel = latestSignatory,
+                    footerNote = latestFooter
                 )
-            )
+            }
         }
         onDismiss()
     }) {
@@ -135,7 +141,7 @@ fun PdfSettingsBottomSheet(
                 }
                 Switch(
                     checked = opts.showSellerLogo,
-                    onCheckedChange = { onUpdateOptions(opts.copy(showSellerLogo = it)) }
+                    onCheckedChange = { enabled -> onUpdateOptions { it.copy(showSellerLogo = enabled) } }
                 )
             }
 
@@ -147,7 +153,7 @@ fun PdfSettingsBottomSheet(
                 PdfPaperSize.entries.forEach { size ->
                     FilterChip(
                         selected = opts.paperSize.equals(size.code, ignoreCase = true),
-                        onClick = { onUpdateOptions(opts.copy(paperSize = size.code)) },
+                        onClick = { onUpdateOptions { it.copy(paperSize = size.code) } },
                         label = { Text(size.label) }
                     )
                 }
@@ -159,7 +165,7 @@ fun PdfSettingsBottomSheet(
                 PdfOrientation.entries.forEach { ori ->
                     FilterChip(
                         selected = opts.orientation.equals(ori.code, ignoreCase = true),
-                        onClick = { onUpdateOptions(opts.copy(orientation = ori.code)) },
+                        onClick = { onUpdateOptions { it.copy(orientation = ori.code) } },
                         label = { Text(ori.label) }
                     )
                 }
@@ -170,7 +176,7 @@ fun PdfSettingsBottomSheet(
                 PdfMarginPreset.entries.forEach { margin ->
                     FilterChip(
                         selected = opts.marginPreset.equals(margin.code, ignoreCase = true),
-                        onClick = { onUpdateOptions(opts.copy(marginPreset = margin.code)) },
+                        onClick = { onUpdateOptions { it.copy(marginPreset = margin.code) } },
                         label = { Text(margin.label) }
                     )
                 }
@@ -187,7 +193,7 @@ fun PdfSettingsBottomSheet(
                             .clip(CircleShape)
                             .semantics { contentDescription = "Accent color ${color.label}" }
                             .clickable(role = Role.RadioButton) {
-                                onUpdateOptions(opts.copy(accentColor = color.code))
+                                onUpdateOptions { it.copy(accentColor = color.code) }
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -246,26 +252,26 @@ fun PdfSettingsBottomSheet(
 
             // Visibility Toggles
             Text("Visible Sections & Columns", style = MaterialTheme.typography.labelMedium)
-            ToggleOptionRow("HSN / SAC Column", opts.showSkuColumn) {
-                onUpdateOptions(opts.copy(showSkuColumn = it))
+            ToggleOptionRow("HSN / SAC Column", opts.showSkuColumn) { enabled ->
+                onUpdateOptions { it.copy(showSkuColumn = enabled) }
             }
-            ToggleOptionRow("Packaging Column", opts.showPackagingColumn) {
-                onUpdateOptions(opts.copy(showPackagingColumn = it))
+            ToggleOptionRow("Packaging Column", opts.showPackagingColumn) { enabled ->
+                onUpdateOptions { it.copy(showPackagingColumn = enabled) }
             }
-            ToggleOptionRow("Discount Column", opts.showDiscountColumn) {
-                onUpdateOptions(opts.copy(showDiscountColumn = it))
+            ToggleOptionRow("Discount Column", opts.showDiscountColumn) { enabled ->
+                onUpdateOptions { it.copy(showDiscountColumn = enabled) }
             }
-            ToggleOptionRow("GST Slab Breakdown", opts.showTaxBreakdown) {
-                onUpdateOptions(opts.copy(showTaxBreakdown = it))
+            ToggleOptionRow("GST Slab Breakdown", opts.showTaxBreakdown) { enabled ->
+                onUpdateOptions { it.copy(showTaxBreakdown = enabled) }
             }
-            ToggleOptionRow("Amount in Words (INR)", opts.showAmountInWords) {
-                onUpdateOptions(opts.copy(showAmountInWords = it))
+            ToggleOptionRow("Amount in Words (INR)", opts.showAmountInWords) { enabled ->
+                onUpdateOptions { it.copy(showAmountInWords = enabled) }
             }
-            ToggleOptionRow("Bank & Remittance Details", opts.showBankDetails) {
-                onUpdateOptions(opts.copy(showBankDetails = it))
+            ToggleOptionRow("Bank & Remittance Details", opts.showBankDetails) { enabled ->
+                onUpdateOptions { it.copy(showBankDetails = enabled) }
             }
-            ToggleOptionRow("Authorized Signatory Block", opts.showSignatureBlock) {
-                onUpdateOptions(opts.copy(showSignatureBlock = it))
+            ToggleOptionRow("Authorized Signatory Block", opts.showSignatureBlock) { enabled ->
+                onUpdateOptions { it.copy(showSignatureBlock = enabled) }
             }
         }
     }

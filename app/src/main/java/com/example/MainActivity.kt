@@ -43,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -134,7 +135,7 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
     val currentRoute = backStackEntry?.destination?.route ?: Routes.DASHBOARD
     val isTopLevel = currentRoute in setOf(Routes.DASHBOARD, Routes.CATALOG, Routes.SETTINGS)
 
-    var settingsTab by remember { mutableIntStateOf(0) }
+    var settingsTab by rememberSaveable { mutableIntStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
@@ -196,32 +197,40 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                     topBar = {
                         if (isTopLevel) {
-                            TopAppBar(
-                                colors = TopAppBarDefaults.topAppBarColors(
-                                    containerColor = MaterialTheme.colorScheme.surface
-                                ),
-                                title = {
-                                    Text(
-                                        text = "Billuminati",
-                                        fontFamily = PlusJakartaSansFontFamily,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 20.sp,
-                                        letterSpacing = (-0.4).sp,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                },
-                                actions = {
-                                    IconButton(
-                                        onClick = { viewModel.toggleTheme() },
-                                        modifier = Modifier.testTag("theme_toggle_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isDark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
-                                            contentDescription = "Toggle light or dark theme"
+                            val topTitle = when (currentRoute) {
+                                Routes.CATALOG -> "Catalog Presets"
+                                Routes.SETTINGS -> "Settings"
+                                else -> "Billuminati"
+                            }
+                            androidx.compose.foundation.layout.Column {
+                                TopAppBar(
+                                    colors = TopAppBarDefaults.topAppBarColors(
+                                        containerColor = MaterialTheme.colorScheme.surface
+                                    ),
+                                    title = {
+                                        Text(
+                                            text = topTitle,
+                                            fontFamily = PlusJakartaSansFontFamily,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 20.sp,
+                                            letterSpacing = (-0.4).sp,
+                                            color = MaterialTheme.colorScheme.onSurface
                                         )
+                                    },
+                                    actions = {
+                                        IconButton(
+                                            onClick = { viewModel.toggleTheme() },
+                                            modifier = Modifier.testTag("theme_toggle_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isDark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                                                contentDescription = "Toggle light or dark theme"
+                                            )
+                                        }
                                     }
-                                }
-                            )
+                                )
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                            }
                         }
                     },
                     bottomBar = {
@@ -381,8 +390,8 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                                 PdfPreviewScreen(
                                     invoice = previewInv,
                                     onBack = { navController.popBackStack() },
-                                    onUpdatePdfOptions = { opts ->
-                                        viewModel.updateInvoicePdfOptions(previewInv.id, opts)
+                                    onUpdatePdfOptions = { transform ->
+                                        viewModel.updateInvoicePdfOptions(previewInv.id, transform)
                                     },
                                     onUpdateSellerLogo = { logo ->
                                         viewModel.updateSellerLogoEverywhere(previewInv.id, logo)

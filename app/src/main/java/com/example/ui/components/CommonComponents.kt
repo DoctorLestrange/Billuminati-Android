@@ -63,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.domain.engine.BillingEngine
 import com.example.domain.model.InvoiceStatus
 import com.example.service.LogoProcessor
@@ -135,8 +136,9 @@ fun BilluminatiSectionCard(
 }
 
 /**
- * Focus-safe numeric input mirroring Billuminati's NumericCellInput so coupled bidirectional
- * pricing fields never overwrite active user typing while focused.
+ * Focus-safe numeric input mirroring Billuminati's DynamicNumberInput so coupled bidirectional
+ * pricing fields never overwrite active user typing while focused and never emit spurious
+ * onValueChange events on blur (which would otherwise corrupt priceEntryMode anchors).
  * Clears initial "0" automatically on focus so users can type a number directly without "0250".
  */
 @Composable
@@ -149,6 +151,7 @@ fun NumericInputField(
     prefix: String? = null,
     suffix: String? = null,
     decimals: Int = 2,
+    supportingText: String? = null,
     testTagName: String? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -164,15 +167,19 @@ fun NumericInputField(
     OutlinedTextField(
         value = text,
         onValueChange = { raw ->
-            val sanitized = raw.filter { it.isDigit() || it == '.' }.take(14)
-            if (sanitized.count { it == '.' } <= 1) {
-                text = sanitized
-                val parsed = sanitized.toDoubleOrNull()
-                if (parsed != null) {
-                    onValueChange(parsed)
-                } else if (sanitized.isEmpty()) {
-                    onValueChange(0.0)
-                }
+            val filtered = raw.filter { it.isDigit() || it == '.' }
+            val firstDot = filtered.indexOf('.')
+            val sanitized = if (firstDot >= 0) {
+                filtered.substring(0, firstDot + 1) + filtered.substring(firstDot + 1).replace(".", "")
+            } else {
+                filtered
+            }.take(14)
+            text = sanitized
+            val parsed = sanitized.toDoubleOrNull()
+            if (parsed != null && parsed.isFinite()) {
+                onValueChange(parsed)
+            } else if (sanitized.isEmpty()) {
+                onValueChange(0.0)
             }
         },
         modifier = modifier
@@ -183,18 +190,27 @@ fun NumericInputField(
                         text = ""
                     }
                 } else if (isFocused && !focusState.isFocused) {
-                    val parsed = text.toDoubleOrNull() ?: 0.0
-                    onValueChange(parsed)
-                    text = formatNumberForInput(parsed, decimals)
+                    // Never fire onValueChange on blur — simply let LaunchedEffect re-sync
+                    // with the engine's canonical formatted value without altering pricing anchors.
+                    text = formattedExternal
                 }
                 isFocused = focusState.isFocused
             },
         enabled = enabled,
         singleLine = true,
-        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+        label = {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1
+            )
+        },
         placeholder = { Text("0", fontFamily = JetBrainsMonoFontFamily) },
         prefix = prefix?.let { { Text(it, fontFamily = JetBrainsMonoFontFamily) } },
         suffix = suffix?.let { { Text(it, fontFamily = JetBrainsMonoFontFamily) } },
+        supportingText = supportingText?.let {
+            { Text(it, style = MaterialTheme.typography.labelSmall) }
+        },
         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMonoFontFamily),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         shape = RoundedCornerShape(10.dp)
@@ -281,26 +297,15 @@ fun IsoDatePickerField(
         testTagName = testTagName,
         modifier = modifier,
         trailingIcon = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (allowClear && value.isNotBlank() && enabled) {
-                    IconButton(onClick = { onDateSelected("") }) {
-                        Icon(
-                            imageVector = Icons.Outlined.Close,
-                            contentDescription = "Clear $label",
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = { if (enabled) showDialog = true },
-                    enabled = enabled
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.CalendarMonth,
-                        contentDescription = "Pick $label",
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+            IconButton(
+                onClick = { if (enabled) showDialog = true },
+                enabled = enabled
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.CalendarMonth,
+                    contentDescription = "Pick $label",
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
     )
@@ -323,7 +328,17 @@ fun IsoDatePickerField(
                 ) { Text("Select") }
             },
             dismissButton = {
-                TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (allowClear && value.isNotBlank()) {
+                        TextButton(
+                            onClick = {
+                                onDateSelected("")
+                                showDialog = false
+                            }
+                        ) { Text("Clear", color = MaterialTheme.colorScheme.error) }
+                    }
+                    TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+                }
             }
         ) {
             DatePicker(state = state)
@@ -461,10 +476,20 @@ fun WelcomeDialog(
             )
         },
         title = {
-            Text(
-                text = "Welcome to Billuminati",
-                style = MaterialTheme.typography.headlineSmall
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "Welcome to Billuminati",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Text(
+                    text = "v${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = JetBrainsMonoFontFamily),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

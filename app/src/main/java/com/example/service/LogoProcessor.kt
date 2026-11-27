@@ -138,15 +138,55 @@ object LogoProcessor {
         }
     }
 
-    fun decodeDataUrlToBitmap(dataUrl: String?): Bitmap? {
+    private const val MAX_LOGO_BASE64_CHARS = 10_000_000 // ~7.5 MB binary limit
+
+    fun decodeDataUrlToBitmap(dataUrl: String?, maxSide: Int = 1024): Bitmap? {
         if (dataUrl.isNullOrBlank()) return null
         return try {
             val base64Part = dataUrl.substringAfter("base64,", dataUrl).trim()
-            if (base64Part.isEmpty()) return null
+            if (base64Part.isEmpty() || base64Part.length > MAX_LOGO_BASE64_CHARS) return null
             val bytes = Base64.decode(base64Part, Base64.DEFAULT)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        } catch (_: Exception) {
+            if (!hasSupportedImageSignature(bytes)) return null
+
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOpts)
+            val rawW = boundsOpts.outWidth
+            val rawH = boundsOpts.outHeight
+            if (rawW <= 0 || rawH <= 0) return null
+
+            var sampleSize = 1
+            while (rawW / sampleSize > maxSide * 2 || rawH / sampleSize > maxSide * 2) {
+                sampleSize *= 2
+            }
+            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+        } catch (_: Throwable) {
             null
         }
+    }
+
+    private fun hasSupportedImageSignature(bytes: ByteArray): Boolean {
+        if (bytes.size < 4) return false
+        val b0 = bytes[0].toInt() and 0xFF
+        val b1 = bytes[1].toInt() and 0xFF
+        val b2 = bytes[2].toInt() and 0xFF
+        val b3 = bytes[3].toInt() and 0xFF
+        // PNG: 89 50 4E 47
+        if (b0 == 0x89 && b1 == 0x50 && b2 == 0x4E && b3 == 0x47) return true
+        // JPEG: FF D8 FF
+        if (b0 == 0xFF && b1 == 0xD8 && b2 == 0xFF) return true
+        // GIF: 47 49 46 38
+        if (b0 == 0x47 && b1 == 0x49 && b2 == 0x46 && b3 == 0x38) return true
+        // BMP: 42 4D
+        if (b0 == 0x42 && b1 == 0x4D) return true
+        // WEBP: RIFF....WEBP
+        if (bytes.size >= 12 &&
+            b0 == 0x52 && b1 == 0x49 && b2 == 0x46 && b3 == 0x46 &&
+            (bytes[8].toInt() and 0xFF) == 0x57 &&
+            (bytes[9].toInt() and 0xFF) == 0x45 &&
+            (bytes[10].toInt() and 0xFF) == 0x42 &&
+            (bytes[11].toInt() and 0xFF) == 0x50
+        ) return true
+        return false
     }
 }

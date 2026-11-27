@@ -1,5 +1,7 @@
 package com.example.service
 
+import android.app.Activity
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -15,13 +17,20 @@ import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import androidx.core.content.FileProvider
+import com.example.domain.model.PdfOrientation
+import com.example.domain.model.PdfPageOptions
+import com.example.domain.model.PdfPaperSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.OutputStream
 
 object PdfExportHelper {
+
+    private const val MAX_IMPORT_BYTES = 25 * 1024 * 1024 // 25 MB safety limit
 
     fun getExportCacheDir(context: Context): File =
         File(context.cacheDir, "exports").apply { mkdirs() }
@@ -45,43 +54,60 @@ object PdfExportHelper {
 
     /**
      * Renders every page of a generated PDF file into crisp high-DPI bitmaps via Android PdfRenderer.
-     * Preserves exact aspect ratio when clamping maximum render dimensions.
+     * Preserves exact aspect ratio when clamping maximum render dimensions and cleans up partial
+     * bitmaps if rendering fails mid-document.
      */
     suspend fun renderPdfPages(pdfFile: File, scale: Float = 2.0f): Result<List<Bitmap>> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val pages = mutableListOf<Bitmap>()
-                ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                    PdfRenderer(pfd).use { renderer ->
-                        for (i in 0 until renderer.pageCount) {
-                            renderer.openPage(i).use { page ->
-                                val pw = page.width.coerceAtLeast(1)
-                                val ph = page.height.coerceAtLeast(1)
-                                val uniformScale = minOf(
-                                    scale,
-                                    2400f / pw.toFloat(),
-                                    3200f / ph.toFloat()
-                                ).coerceAtLeast(0.5f)
-                                val width = (pw * uniformScale).toInt().coerceAtLeast(1)
-                                val height = (ph * uniformScale).toInt().coerceAtLeast(1)
-                                val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                                bmp.eraseColor(Color.WHITE)
-                                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                                pages.add(bmp)
+                try {
+                    ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                        PdfRenderer(pfd).use { renderer ->
+                            for (i in 0 until renderer.pageCount) {
+                                renderer.openPage(i).use { page ->
+                                    val pw = page.width.coerceAtLeast(1)
+                                    val ph = page.height.coerceAtLeast(1)
+                                    val uniformScale = minOf(
+                                        scale,
+                                        2400f / pw.toFloat(),
+                                        3200f / ph.toFloat()
+                                    ).coerceAtLeast(0.5f)
+                                    val width = (pw * uniformScale).toInt().coerceAtLeast(1)
+                                    val height = (ph * uniformScale).toInt().coerceAtLeast(1)
+                                    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                                    bmp.eraseColor(Color.WHITE)
+                                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                    pages.add(bmp)
+                                }
                             }
                         }
                     }
+                    pages
+                } catch (t: Throwable) {
+                    pages.forEach { if (!it.isRecycled) it.recycle() }
+                    throw t
                 }
-                pages
             }
         }
+
+    private fun openTruncatedOutputStream(context: Context, targetUri: Uri): OutputStream? {
+        // Android 10+ (API 29+) requires explicit "wt" mode so overwriting an existing SAF document
+        // truncates trailing bytes from a longer previous file.
+        return try {
+            context.contentResolver.openOutputStream(targetUri, "wt")
+        } catch (_: Exception) {
+            context.contentResolver.openOutputStream(targetUri)
+        }
+    }
 
     suspend fun copyFileToUri(context: Context, sourceFile: File, targetUri: Uri): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
-                context.contentResolver.openOutputStream(targetUri)?.use { out ->
+                openTruncatedOutputStream(context, targetUri)?.use { out ->
                     FileInputStream(sourceFile).use { input ->
                         input.copyTo(out)
+                        out.flush()
                     }
                 } ?: throw IllegalStateException("Unable to open destination file.")
                 Unit
@@ -91,8 +117,9 @@ object PdfExportHelper {
     suspend fun writeTextToUri(context: Context, content: String, targetUri: Uri): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
-                context.contentResolver.openOutputStream(targetUri)?.use { out ->
+                openTruncatedOutputStream(context, targetUri)?.use { out ->
                     out.write(content.toByteArray(Charsets.UTF_8))
+                    out.flush()
                 } ?: throw IllegalStateException("Unable to open destination file.")
             }
         }
@@ -101,7 +128,19 @@ object PdfExportHelper {
         withContext(Dispatchers.IO) {
             runCatching {
                 context.contentResolver.openInputStream(uri)?.use { input ->
-                    input.bufferedReader(Charsets.UTF_8).readText()
+                    val buffer = ByteArray(16 * 1024)
+                    val baos = ByteArrayOutputStream()
+                    var totalRead = 0
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        totalRead += read
+                        if (totalRead > MAX_IMPORT_BYTES) {
+                            throw IllegalArgumentException("Selected file exceeds the 25 MB backup limit.")
+                        }
+                        baos.write(buffer, 0, read)
+                    }
+                    baos.toString(Charsets.UTF_8.name())
                 } ?: throw IllegalStateException("Unable to read selected file.")
             }
         }
@@ -121,18 +160,41 @@ object PdfExportHelper {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = mimeType
             putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newRawUri(chooserTitle, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         val chooser = Intent.createChooser(intent, chooserTitle).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (context !is Activity) {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
         }
         context.startActivity(chooser)
     }
 
-    fun printPdfFile(context: Context, pdfFile: File, jobName: String): Result<Unit> = runCatching {
+    fun printPdfFile(
+        context: Context,
+        pdfFile: File,
+        jobName: String,
+        pdfOptions: PdfPageOptions? = null
+    ): Result<Unit> = runCatching {
         require(pdfFile.exists()) { "PDF file is not ready to print." }
         val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
             ?: throw IllegalStateException("Android Print service is unavailable on this device.")
+
+        val attributesBuilder = PrintAttributes.Builder()
+        if (pdfOptions != null) {
+            val baseMedia = when (PdfPaperSize.fromCode(pdfOptions.paperSize)) {
+                PdfPaperSize.A4 -> PrintAttributes.MediaSize.ISO_A4
+                PdfPaperSize.LETTER -> PrintAttributes.MediaSize.NA_LETTER
+                PdfPaperSize.LEGAL -> PrintAttributes.MediaSize.NA_LEGAL
+            }
+            val orientedMedia = if (PdfOrientation.fromCode(pdfOptions.orientation) == PdfOrientation.LANDSCAPE) {
+                baseMedia.asLandscape()
+            } else {
+                baseMedia.asPortrait()
+            }
+            attributesBuilder.setMediaSize(orientedMedia)
+        }
 
         val adapter = object : PrintDocumentAdapter() {
             override fun onLayout(
@@ -184,6 +246,6 @@ object PdfExportHelper {
                 }
             }
         }
-        printManager.print(jobName, adapter, PrintAttributes.Builder().build())
+        printManager.print(jobName, adapter, attributesBuilder.build())
     }
 }

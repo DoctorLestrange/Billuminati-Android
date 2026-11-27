@@ -21,6 +21,7 @@ import com.example.domain.model.PartyDetails
 import com.example.domain.model.PdfPageOptions
 import com.example.domain.model.PriceEntryMode
 import com.example.domain.model.TaxMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -32,6 +33,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 data class DashboardMetrics(
@@ -62,6 +67,9 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
     private val preferencesStore = PreferencesStore(application)
     private val repository = BilluminatiRepository(database.dao(), preferencesStore)
     private val idCounter = AtomicLong(1L)
+    private val isSaving = AtomicBoolean(false)
+    private val pdfOptionsMutex = Mutex()
+    private val duplicateMutex = Mutex()
 
     private val _filters = MutableStateFlow(DashboardFilters())
     private val _editingInvoice = MutableStateFlow<Invoice?>(null)
@@ -182,8 +190,9 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
     fun startNewInvoice() {
         val state = uiState.value
         val now = System.currentTimeMillis()
+        val blankId = nextId("inv")
         val blank = Invoice(
-            id = nextId("inv"),
+            id = blankId,
             invoiceNumber = BillingEngine.generateNextInvoiceNumber(state.invoices),
             issueDate = BillingEngine.todayIsoDate(now),
             dueDate = BillingEngine.addDaysIsoDate(15, now),
@@ -193,18 +202,39 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
             seller = state.defaults.defaultSeller,
             buyer = PartyDetails(country = "India"),
             bankDetails = state.defaults.defaultBank,
-            items = listOf(createEmptyLineItem()),
+            items = listOf(createEmptyLineItem(TaxMode.CGST_SGST)),
             additionalDiscountAmount = 0.0,
             roundOff = true,
             notes = "",
             termsAndConditions = state.defaults.defaultTermsAndConditions,
-            pdfOptions = state.defaults.defaultPdfOptions.copy(showSellerLogo = true),
+            pdfOptions = state.defaults.defaultPdfOptions,
             createdAt = BillingEngine.nowIsoTimestamp(now),
             updatedAt = BillingEngine.nowIsoTimestamp(now)
         )
         _editingInvoice.value = blank
         _originalEditingInvoice.value = blank
         _isCreatingNew.value = true
+
+        // If tapped on cold start before Room emitted initial state, hydrate defaults & next sequence safely.
+        if (!state.isLoaded) {
+            viewModelScope.launch {
+                val latestInvoices = repository.getAllInvoicesOnce()
+                val latestDefaults = repository.getBusinessDefaultsOnce()
+                val nextNum = BillingEngine.generateNextInvoiceNumber(latestInvoices)
+                val current = _editingInvoice.value
+                if (current != null && current.id == blankId && current == _originalEditingInvoice.value) {
+                    val hydrated = current.copy(
+                        invoiceNumber = nextNum,
+                        seller = latestDefaults.defaultSeller,
+                        bankDetails = latestDefaults.defaultBank,
+                        termsAndConditions = latestDefaults.defaultTermsAndConditions,
+                        pdfOptions = latestDefaults.defaultPdfOptions
+                    )
+                    _editingInvoice.value = hydrated
+                    _originalEditingInvoice.value = hydrated
+                }
+            }
+        }
     }
 
     fun startEditInvoice(invoice: Invoice) {
@@ -245,18 +275,28 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun addEmptyLineItem() {
+    fun addEmptyLineItem(): String {
+        val currentMode = _editingInvoice.value?.let { TaxMode.fromCode(it.taxMode) } ?: TaxMode.CGST_SGST
+        val newItem = createEmptyLineItem(currentMode)
         updateEditingInvoice { inv ->
-            inv.copy(items = inv.items + createEmptyLineItem())
+            inv.copy(items = inv.items + newItem)
         }
+        return newItem.id
     }
 
     fun addLineItemFromCatalog(preset: CatalogItem) {
         updateEditingInvoice { inv ->
             val taxMode = TaxMode.fromCode(inv.taxMode)
+            val baseGst = kotlin.math.max(0.0, preset.taxPercent)
+            val halfGst = BillingEngine.roundCurrency(baseGst / 2.0)
+            val effectiveRate = if (taxMode == TaxMode.EXEMPT) 0.0 else baseGst
             val inclPrice = BillingEngine.getCatalogItemInclusivePrice(preset)
-            val half = BillingEngine.roundCurrency(preset.taxPercent / 2.0)
-            val baseItem = InvoiceLineItem(
+            val exclPrice = if (taxMode == TaxMode.EXEMPT) {
+                inclPrice
+            } else {
+                BillingEngine.roundRate(inclPrice / (1.0 + effectiveRate / 100.0))
+            }
+            val calibrated = InvoiceLineItem(
                 id = nextId("item"),
                 name = preset.name,
                 description = "",
@@ -266,15 +306,14 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
                 packageCount = 1.0,
                 quantity = 1.0,
                 priceEntryMode = PriceEntryMode.INCLUSIVE.code,
-                unitPrice = preset.unitPrice,
+                unitPrice = exclPrice,
                 unitPriceInclusive = inclPrice,
                 discountAmount = 0.0,
-                taxPercent = preset.taxPercent,
-                cgstPercent = half,
-                sgstPercent = half,
-                igstPercent = preset.taxPercent
+                taxPercent = effectiveRate,
+                cgstPercent = halfGst,
+                sgstPercent = BillingEngine.roundCurrency(baseGst - halfGst),
+                igstPercent = baseGst
             )
-            val calibrated = BillingEngine.updateItemFromInclusiveRate(baseItem, inclPrice, taxMode)
             val cleaned = if (inv.items.size == 1 && inv.items.first().name.isBlank() && inv.items.first().unitPrice == 0.0 && inv.items.first().unitPriceInclusive == 0.0) {
                 listOf(calibrated)
             } else {
@@ -286,8 +325,9 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
 
     fun removeLineItem(itemId: String) {
         updateEditingInvoice { inv ->
+            val mode = TaxMode.fromCode(inv.taxMode)
             val remaining = inv.items.filterNot { it.id == itemId }
-            inv.copy(items = remaining.ifEmpty { listOf(createEmptyLineItem()) })
+            inv.copy(items = remaining.ifEmpty { listOf(createEmptyLineItem(mode)) })
         }
     }
 
@@ -308,24 +348,44 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
             _snackbarEvents.tryEmit("Please enter an invoice number before saving")
             return
         }
+        if (!draft.isCashCustomer &&
+            draft.buyer.companyName.trim().isEmpty() &&
+            draft.buyer.name.trim().isEmpty()
+        ) {
+            _snackbarEvents.tryEmit("Please enter a buyer name or enable Cash Sale")
+            return
+        }
+        if (draft.items.isEmpty() || draft.items.any { it.name.trim().isEmpty() }) {
+            _snackbarEvents.tryEmit("Please name all line items before saving")
+            return
+        }
+        if (!isSaving.compareAndSet(false, true)) return
+
         val normalized = BillingEngine.normalizeInvoiceRecord(
             draft.copy(updatedAt = BillingEngine.nowIsoTimestamp())
         )
         viewModelScope.launch {
-            repository.saveInvoice(normalized)
-            if (normalized.seller.logoDataUrl != uiState.value.defaults.defaultSeller.logoDataUrl) {
-                val updatedDefaults = uiState.value.defaults.copy(
-                    defaultSeller = uiState.value.defaults.defaultSeller.copy(
-                        logoDataUrl = normalized.seller.logoDataUrl
+            try {
+                repository.saveInvoice(normalized)
+                val latestDefaults = repository.getBusinessDefaultsOnce()
+                if (normalized.seller.logoDataUrl.isNotBlank() &&
+                    normalized.seller.logoDataUrl != latestDefaults.defaultSeller.logoDataUrl
+                ) {
+                    val updatedDefaults = latestDefaults.copy(
+                        defaultSeller = latestDefaults.defaultSeller.copy(
+                            logoDataUrl = normalized.seller.logoDataUrl
+                        )
                     )
-                )
-                repository.saveBusinessDefaults(updatedDefaults)
+                    repository.saveBusinessDefaults(updatedDefaults)
+                }
+                _editingInvoice.value = normalized
+                _originalEditingInvoice.value = normalized
+                _isCreatingNew.value = false
+                _snackbarEvents.tryEmit("Saved ${normalized.invoiceNumber}")
+                onSaved?.invoke(normalized)
+            } finally {
+                isSaving.set(false)
             }
-            _editingInvoice.value = normalized
-            _originalEditingInvoice.value = normalized
-            _isCreatingNew.value = false
-            _snackbarEvents.tryEmit("Saved ${normalized.invoiceNumber}")
-            onSaved?.invoke(normalized)
         }
     }
 
@@ -340,28 +400,31 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun duplicateInvoice(source: Invoice) {
-        val now = System.currentTimeMillis()
-        val cloned = BillingEngine.normalizeInvoiceRecord(
-            source.copy(
-                id = nextId("inv"),
-                invoiceNumber = BillingEngine.generateNextInvoiceNumber(uiState.value.invoices),
-                issueDate = BillingEngine.todayIsoDate(now),
-                dueDate = BillingEngine.addDaysIsoDate(15, now),
-                status = InvoiceStatus.PENDING.label,
-                paymentMethod = "",
-                paymentMethodOther = "",
-                paymentDate = "",
-                paymentMethodDetails = "",
-                items = source.items.map { item ->
-                    item.copy(id = nextId("item"))
-                },
-                createdAt = BillingEngine.nowIsoTimestamp(now),
-                updatedAt = BillingEngine.nowIsoTimestamp(now)
-            )
-        )
         viewModelScope.launch {
-            repository.saveInvoice(cloned)
-            _snackbarEvents.tryEmit("Duplicated as ${cloned.invoiceNumber}")
+            duplicateMutex.withLock {
+                val now = System.currentTimeMillis()
+                val existingInvoices = repository.getAllInvoicesOnce()
+                val cloned = BillingEngine.normalizeInvoiceRecord(
+                    source.copy(
+                        id = nextId("inv"),
+                        invoiceNumber = BillingEngine.generateNextInvoiceNumber(existingInvoices),
+                        issueDate = BillingEngine.todayIsoDate(now),
+                        dueDate = BillingEngine.addDaysIsoDate(15, now),
+                        status = InvoiceStatus.PENDING.label,
+                        paymentMethod = "",
+                        paymentMethodOther = "",
+                        paymentDate = "",
+                        paymentMethodDetails = "",
+                        items = source.items.map { item ->
+                            item.copy(id = nextId("item"))
+                        },
+                        createdAt = BillingEngine.nowIsoTimestamp(now),
+                        updatedAt = BillingEngine.nowIsoTimestamp(now)
+                    )
+                )
+                repository.saveInvoice(cloned)
+                _snackbarEvents.tryEmit("Duplicated as ${cloned.invoiceNumber}")
+            }
         }
     }
 
@@ -372,14 +435,19 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
                 _editingInvoice.value = null
                 _originalEditingInvoice.value = null
             }
+            if (_pdfPreviewInvoiceId.value == invoiceId) {
+                _pdfPreviewInvoiceId.value = null
+            }
             _snackbarEvents.tryEmit("Invoice deleted")
         }
     }
 
     fun changeInvoiceStatus(invoiceId: String, status: InvoiceStatus) {
-        val existing = uiState.value.invoices.firstOrNull { it.id == invoiceId } ?: return
-        val updated = BillingEngine.applyStatusTransition(existing, status)
         viewModelScope.launch {
+            val existing = repository.getInvoiceById(invoiceId)
+                ?: uiState.value.invoices.firstOrNull { it.id == invoiceId }
+                ?: return@launch
+            val updated = BillingEngine.applyStatusTransition(existing, status)
             repository.saveInvoice(updated)
             if (_editingInvoice.value?.id == invoiceId) {
                 _editingInvoice.value = updated
@@ -389,31 +457,52 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun updateInvoicePdfOptions(invoiceId: String, options: PdfPageOptions) {
-        val existing = uiState.value.invoices.firstOrNull { it.id == invoiceId }
+    /**
+     * Atomically applies a transform to an invoice's PDF options under a Mutex against the latest
+     * persisted record so concurrent rapid toggles and debounced text edits never clobber each other.
+     */
+    fun updateInvoicePdfOptions(invoiceId: String, transform: (PdfPageOptions) -> PdfPageOptions) {
         viewModelScope.launch {
-            if (existing != null) {
-                repository.saveInvoice(existing.copy(pdfOptions = options, updatedAt = BillingEngine.nowIsoTimestamp()))
-            }
-            _editingInvoice.update { current ->
-                if (current?.id == invoiceId) current.copy(pdfOptions = options) else current
-            }
-            _originalEditingInvoice.update { orig ->
-                if (orig?.id == invoiceId) orig.copy(pdfOptions = options) else orig
+            pdfOptionsMutex.withLock {
+                val persisted = repository.getInvoiceById(invoiceId)
+                    ?: uiState.value.invoices.firstOrNull { it.id == invoiceId }
+                val baseOptions = persisted?.pdfOptions
+                    ?: _editingInvoice.value?.takeIf { it.id == invoiceId }?.pdfOptions
+                    ?: return@withLock
+                val nextOptions = transform(baseOptions)
+                if (persisted != null) {
+                    repository.saveInvoice(
+                        persisted.copy(
+                            pdfOptions = nextOptions,
+                            updatedAt = BillingEngine.nowIsoTimestamp()
+                        )
+                    )
+                }
+                _editingInvoice.update { current ->
+                    if (current?.id == invoiceId) current.copy(pdfOptions = nextOptions) else current
+                }
+                _originalEditingInvoice.update { orig ->
+                    if (orig?.id == invoiceId) orig.copy(pdfOptions = nextOptions) else orig
+                }
             }
         }
     }
 
     fun updateSellerLogoEverywhere(invoiceId: String?, logoDataUrl: String) {
         viewModelScope.launch {
-            val currentDefaults = uiState.value.defaults
+            val currentDefaults = repository.getBusinessDefaultsOnce()
+            val previousDefaultLogo = currentDefaults.defaultSeller.logoDataUrl
             repository.saveBusinessDefaults(
                 currentDefaults.copy(
                     defaultSeller = currentDefaults.defaultSeller.copy(logoDataUrl = logoDataUrl)
                 )
             )
-            val changedInvoices = uiState.value.invoices.mapNotNull { inv ->
-                val shouldUpdate = invoiceId == null || inv.id == invoiceId || inv.seller.logoDataUrl.isBlank()
+            val allInvoices = repository.getAllInvoicesOnce()
+            val changedInvoices = allInvoices.mapNotNull { inv ->
+                val shouldUpdate = invoiceId == null ||
+                    inv.id == invoiceId ||
+                    inv.seller.logoDataUrl.isBlank() ||
+                    inv.seller.logoDataUrl == previousDefaultLogo
                 if (shouldUpdate && inv.seller.logoDataUrl != logoDataUrl) {
                     inv.copy(
                         seller = inv.seller.copy(logoDataUrl = logoDataUrl),
@@ -429,13 +518,17 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
             _editingInvoice.update { current ->
                 current?.copy(seller = current.seller.copy(logoDataUrl = logoDataUrl))
             }
+            _originalEditingInvoice.update { orig ->
+                orig?.copy(seller = orig.seller.copy(logoDataUrl = logoDataUrl))
+            }
             _snackbarEvents.tryEmit(if (logoDataUrl.isBlank()) "Seller logo removed" else "Seller logo updated")
         }
     }
 
     fun saveBusinessDefaults(seller: PartyDetails, bank: BankDetails, defaultTerms: String) {
         viewModelScope.launch {
-            val currentDefaults = uiState.value.defaults
+            val currentDefaults = repository.getBusinessDefaultsOnce()
+            val previousDefaultLogo = currentDefaults.defaultSeller.logoDataUrl
             repository.saveBusinessDefaults(
                 currentDefaults.copy(
                     defaultSeller = seller,
@@ -443,18 +536,26 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
                     defaultTermsAndConditions = defaultTerms
                 )
             )
-            val logoChangedInvoices = uiState.value.invoices.mapNotNull { inv ->
-                if (inv.seller.logoDataUrl != seller.logoDataUrl) {
-                    inv.copy(seller = inv.seller.copy(logoDataUrl = seller.logoDataUrl))
-                } else {
-                    null
+            if (previousDefaultLogo != seller.logoDataUrl) {
+                val allInvoices = repository.getAllInvoicesOnce()
+                val logoChangedInvoices = allInvoices.mapNotNull { inv ->
+                    val usesDefaultLogo = inv.seller.logoDataUrl.isBlank() ||
+                        inv.seller.logoDataUrl == previousDefaultLogo
+                    if (usesDefaultLogo && inv.seller.logoDataUrl != seller.logoDataUrl) {
+                        inv.copy(seller = inv.seller.copy(logoDataUrl = seller.logoDataUrl))
+                    } else {
+                        null
+                    }
                 }
-            }
-            if (logoChangedInvoices.isNotEmpty()) {
-                repository.saveInvoices(logoChangedInvoices)
-            }
-            _editingInvoice.update { current ->
-                current?.copy(seller = current.seller.copy(logoDataUrl = seller.logoDataUrl))
+                if (logoChangedInvoices.isNotEmpty()) {
+                    repository.saveInvoices(logoChangedInvoices)
+                }
+                _editingInvoice.update { current ->
+                    current?.copy(seller = current.seller.copy(logoDataUrl = seller.logoDataUrl))
+                }
+                _originalEditingInvoice.update { orig ->
+                    orig?.copy(seller = orig.seller.copy(logoDataUrl = seller.logoDataUrl))
+                }
             }
             _snackbarEvents.tryEmit("Business defaults saved")
         }
@@ -499,16 +600,20 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun importBackupJson(rawJson: String, replaceExisting: Boolean, onResult: (Boolean, String) -> Unit) {
-        when (val result = repository.serializer.validateAndParseBackupJson(rawJson)) {
-            is BackupParseResult.Error -> {
-                onResult(false, result.message)
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.Default) {
+                repository.serializer.validateAndParseBackupJson(rawJson)
             }
-            is BackupParseResult.Success -> {
-                viewModelScope.launch {
+            when (result) {
+                is BackupParseResult.Error -> {
+                    onResult(false, result.message)
+                }
+                is BackupParseResult.Success -> {
+                    val latestDefaults = repository.getBusinessDefaultsOnce()
                     repository.importBackup(
                         backup = result.backup,
                         replaceExisting = replaceExisting,
-                        currentDefaults = uiState.value.defaults
+                        currentDefaults = latestDefaults
                     )
                     val modeLabel = if (replaceExisting) "Replaced workspace with" else "Merged"
                     val msg = "$modeLabel ${result.backup.invoices.size} invoice(s)"
@@ -523,22 +628,25 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
         _snackbarEvents.tryEmit(message)
     }
 
-    private fun createEmptyLineItem(): InvoiceLineItem = InvoiceLineItem(
-        id = nextId("item"),
-        name = "",
-        description = "",
-        skuOrHsn = "",
-        packagingType = PackagingType.BOX.label,
-        unitsPerPackage = 1,
-        packageCount = 1.0,
-        quantity = 1.0,
-        priceEntryMode = PriceEntryMode.EXCLUSIVE.code,
-        unitPrice = 0.0,
-        unitPriceInclusive = 0.0,
-        discountAmount = 0.0,
-        taxPercent = 18.0,
-        cgstPercent = 9.0,
-        sgstPercent = 9.0,
-        igstPercent = 18.0
-    )
+    private fun createEmptyLineItem(taxMode: TaxMode = TaxMode.CGST_SGST): InvoiceLineItem {
+        val isExempt = taxMode == TaxMode.EXEMPT
+        return InvoiceLineItem(
+            id = nextId("item"),
+            name = "",
+            description = "",
+            skuOrHsn = "",
+            packagingType = PackagingType.BOX.label,
+            unitsPerPackage = 1,
+            packageCount = 1.0,
+            quantity = 1.0,
+            priceEntryMode = PriceEntryMode.EXCLUSIVE.code,
+            unitPrice = 0.0,
+            unitPriceInclusive = 0.0,
+            discountAmount = 0.0,
+            taxPercent = if (isExempt) 0.0 else 18.0,
+            cgstPercent = 9.0,
+            sgstPercent = 9.0,
+            igstPercent = 18.0
+        )
+    }
 }

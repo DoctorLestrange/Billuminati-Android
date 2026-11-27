@@ -264,7 +264,7 @@ object InvoicePdfGenerator {
                 }
 
                 fun ensureSpace(neededPt: Float, onNewPage: (() -> Unit)? = null) {
-                    if (y + neededPt > pageHeight - margin - 24f) {
+                    if (y > margin + 24f && y + neededPt > pageHeight - margin - 24f) {
                         startNewPage()
                         onNewPage?.invoke()
                     }
@@ -452,13 +452,13 @@ object InvoicePdfGenerator {
                 // 4. Line Items Table (balanced column weights + auto-fit numeric cells)
                 val cols = buildList {
                     add(ColDef("sno", "#", 4f, Paint.Align.LEFT))
-                    add(ColDef("item", "Description", 24f, Paint.Align.LEFT))
+                    add(ColDef("item", "Item Description", 24f, Paint.Align.LEFT))
                     if (opts.showSkuColumn) add(ColDef("sku", "HSN/SAC", 9f, Paint.Align.LEFT))
                     if (opts.showPackagingColumn) add(ColDef("pkg", "Pkg", 7.5f, Paint.Align.LEFT))
                     add(ColDef("qty", "Qty", 6.5f, Paint.Align.RIGHT))
-                    add(ColDef("rate", "Rate", 12f, Paint.Align.RIGHT))
-                    if (opts.showDiscountColumn) add(ColDef("disc", "Disc.", 10f, Paint.Align.RIGHT))
-                    add(ColDef("taxable", "Taxable", 12.5f, Paint.Align.RIGHT))
+                    add(ColDef("rate", "Rate (Excl)", 12f, Paint.Align.RIGHT))
+                    if (opts.showDiscountColumn) add(ColDef("disc", "Discount", 10f, Paint.Align.RIGHT))
+                    add(ColDef("taxable", "Taxable Val", 12.5f, Paint.Align.RIGHT))
                     when (taxMode) {
                         TaxMode.CGST_SGST -> {
                             add(ColDef("cgst", "CGST", 11f, Paint.Align.RIGHT))
@@ -467,7 +467,7 @@ object InvoicePdfGenerator {
                         TaxMode.IGST -> add(ColDef("igst", "IGST", 13f, Paint.Align.RIGHT))
                         TaxMode.EXEMPT -> Unit
                     }
-                    add(ColDef("total", "Total", 14.5f, Paint.Align.RIGHT))
+                    add(ColDef("total", "Total (Incl)", 14.5f, Paint.Align.RIGHT))
                 }
                 val totalWeight = cols.sumOf { it.weight.toDouble() }.toFloat()
                 val colWidths = cols.map { (it.weight / totalWeight) * contentWidth }
@@ -517,21 +517,26 @@ object InvoicePdfGenerator {
                         val itemColW = (colWidths[itemColIdx] - 5f).toInt()
 
                         val nameText = item.name.ifBlank { "Untitled Item" }
-                        var nameSize = 7.7f
+                        val typo = BillingEngine.getItemNameTypography(nameText)
+                        var nameSize = typo.pdfFontSizePt
                         var nameLayout = buildLayout(nameText, textPaint(nameSize, inkPrimary, bold = true), itemColW)
-                        if (nameLayout.lineCount >= 3) {
-                            nameSize = 6.8f
+                        if (nameLayout.lineCount > 1 && nameSize > 6.9f) {
+                            nameSize = 6.9f
+                            nameLayout = buildLayout(nameText, textPaint(nameSize, inkPrimary, bold = true), itemColW)
+                        }
+                        if (nameLayout.lineCount > 2 && nameSize > 6.4f) {
+                            nameSize = 6.4f
                             nameLayout = buildLayout(nameText, textPaint(nameSize, inkPrimary, bold = true), itemColW)
                         }
                         val descLayout = if (item.description.isNotBlank()) {
-                            buildLayout(item.description, textPaint(6.7f, inkMuted), itemColW)
+                            buildLayout(item.description, textPaint(6.4f, inkMuted), itemColW)
                         } else {
                             null
                         }
 
                         val textBlockH = nameLayout.height + (descLayout?.let { it.height + 1.5f } ?: 0f)
-                        val minTaxRowH = if (taxMode != TaxMode.EXEMPT) 23f else 18f
-                        val rowH = max(minTaxRowH, textBlockH + 8f)
+                        val minRowH = 24f
+                        val rowH = max(minRowH, textBlockH + 8f)
 
                         ensureSpace(rowH + 4f) { drawTableHeader() }
 
@@ -556,12 +561,17 @@ object InvoicePdfGenerator {
                                 "sku" -> drawFittedText(canvas, item.skuOrHsn.ifBlank { "—" }, tx, baseLineY, cellMaxW, 7.0f, inkSecondary)
                                 "pkg" -> drawFittedText(canvas, item.packagingType, tx, baseLineY, cellMaxW, 7.0f, inkSecondary)
                                 "qty" -> drawFittedText(canvas, BillingEngine.formatQuantity(item.quantity), tx, baseLineY, cellMaxW, 7.2f, inkPrimary, align = Paint.Align.RIGHT)
-                                "rate" -> drawFittedText(canvas, BillingEngine.formatCurrency(calc.unitPriceExclusive), tx, baseLineY, cellMaxW, 7.1f, inkPrimary, align = Paint.Align.RIGHT)
+                                "rate" -> {
+                                    drawFittedText(canvas, BillingEngine.formatCurrency(calc.unitPriceExclusive), tx, baseLineY, cellMaxW, 7.1f, inkPrimary, align = Paint.Align.RIGHT)
+                                    drawFittedText(canvas, "Incl: ${BillingEngine.formatCurrency(calc.unitPriceInclusive)}", tx, baseLineY + 8.5f, cellMaxW, 5.9f, inkMuted, align = Paint.Align.RIGHT)
+                                }
                                 "disc" -> {
-                                    val dStr = if (calc.discountAmount > 0.0) "-${BillingEngine.formatCurrency(calc.discountAmount)}" else "—"
+                                    // Pre-tax discount deducted before GST so Rate * Qty - Discount = Taxable Val
+                                    val preTaxDisc = calc.preTaxDiscountAmount
+                                    val dStr = if (preTaxDisc > 0.0) "-${BillingEngine.formatCurrency(preTaxDisc)}" else "—"
                                     drawFittedText(canvas, dStr, tx, baseLineY, cellMaxW, 7.0f, inkSecondary, align = Paint.Align.RIGHT)
                                 }
-                                "taxable" -> drawFittedText(canvas, BillingEngine.formatCurrency(calc.taxableAmount), tx, baseLineY, cellMaxW, 7.1f, inkPrimary, align = Paint.Align.RIGHT)
+                                "taxable" -> drawFittedText(canvas, BillingEngine.formatCurrency(calc.taxableAmount), tx, baseLineY, cellMaxW, 7.1f, inkDark, bold = true, align = Paint.Align.RIGHT)
                                 "cgst" -> {
                                     drawFittedText(canvas, BillingEngine.formatCurrency(calc.cgstAmount), tx, baseLineY, cellMaxW, 6.9f, inkPrimary, align = Paint.Align.RIGHT)
                                     drawFittedText(canvas, "@${BillingEngine.formatPercent(calc.effectiveCgstPercent)}%", tx, baseLineY + 8.5f, cellMaxW, 6.0f, inkMuted, align = Paint.Align.RIGHT)
@@ -601,55 +611,76 @@ object InvoicePdfGenerator {
                     summary.taxSlabBreakdown.map { slab ->
                         val slabStr = when (taxMode) {
                             TaxMode.CGST_SGST ->
-                                "GST ${BillingEngine.formatPercent(slab.rate)}%: Taxable ${BillingEngine.formatCurrency(slab.taxableAmount)} · CGST ${BillingEngine.formatCurrency(slab.cgst)} + SGST ${BillingEngine.formatCurrency(slab.sgst)}"
+                                "Taxable ${BillingEngine.formatCurrency(slab.taxableAmount)}: CGST @${BillingEngine.formatPercent(slab.cgstRate)}% (${BillingEngine.formatCurrency(slab.cgst)}) + SGST @${BillingEngine.formatPercent(slab.sgstRate)}% (${BillingEngine.formatCurrency(slab.sgst)})"
                             TaxMode.IGST ->
-                                "IGST ${BillingEngine.formatPercent(slab.rate)}%: Taxable ${BillingEngine.formatCurrency(slab.taxableAmount)} · Tax ${BillingEngine.formatCurrency(slab.igst)}"
+                                "Taxable ${BillingEngine.formatCurrency(slab.taxableAmount)}: IGST @${BillingEngine.formatPercent(slab.igstRate)}% (${BillingEngine.formatCurrency(slab.igst)})"
                             TaxMode.EXEMPT -> ""
                         }
                         buildLayout(slabStr, textPaint(7.2f, inkSecondary), leftSumW.toInt())
                     }
                 } else emptyList()
 
-                val bankLayouts = if (opts.showBankDetails && invoice.bankDetails.bankName.isNotBlank()) {
+                val bank = invoice.bankDetails
+                val hasAnyBankInfo = listOf(
+                    bank.bankName,
+                    bank.accountName,
+                    bank.accountNumber,
+                    bank.routingOrIfsc,
+                    bank.swiftOrIban,
+                    bank.paymentInstructions
+                ).any { it.isNotBlank() }
+
+                val bankLayouts = if (opts.showBankDetails && hasAnyBankInfo) {
                     val bankParts = buildList {
-                        val header = if (invoice.bankDetails.accountName.isNotBlank()) {
-                            "${invoice.bankDetails.bankName} — ${invoice.bankDetails.accountName}"
-                        } else {
-                            invoice.bankDetails.bankName
-                        }
-                        add(header)
+                        val header = listOf(bank.bankName, bank.accountName)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" — ")
+                        if (header.isNotBlank()) add(header)
                         val acct = listOfNotNull(
-                            invoice.bankDetails.accountNumber.takeIf { it.isNotBlank() }?.let { "A/C: $it" },
-                            invoice.bankDetails.routingOrIfsc.takeIf { it.isNotBlank() }?.let { "IFSC: $it" }
+                            bank.accountNumber.takeIf { it.isNotBlank() }?.let { "A/C No: $it" },
+                            bank.routingOrIfsc.takeIf { it.isNotBlank() }?.let { "IFSC: $it" }
                         ).joinToString(" · ")
                         if (acct.isNotBlank()) add(acct)
-                        if (invoice.bankDetails.swiftOrIban.isNotBlank()) add("UPI / Branch: ${invoice.bankDetails.swiftOrIban}")
-                        if (invoice.bankDetails.paymentInstructions.isNotBlank()) add(invoice.bankDetails.paymentInstructions)
+                        if (bank.swiftOrIban.isNotBlank()) add("UPI / Branch: ${bank.swiftOrIban}")
+                        if (bank.paymentInstructions.isNotBlank()) add(bank.paymentInstructions)
                     }
                     bankParts.mapIndexed { idx, line ->
                         buildLayout(line, textPaint(7.3f, if (idx == 0) inkPrimary else inkSecondary, bold = idx == 0), leftSumW.toInt())
                     }
                 } else emptyList()
 
+                // Right Column Totals matching Billuminati Web pdfGenerator.ts 1-to-1:
+                // Subtotal (lineTaxableSubtotal) - Additional Pre-Tax Discount = Total Taxable Value + GST + Round Off = Grand Total
+                data class SummaryRowItem(val label: String, val value: String, val bold: Boolean = false, val dividerBefore: Boolean = false)
                 val totalRows = buildList {
-                    add("Taxable Subtotal" to BillingEngine.formatCurrency(summary.taxableSubtotal))
-                    if (summary.itemDiscountTotal > 0.0) {
-                        add("Item Discounts (Incl.)" to "-${BillingEngine.formatCurrency(summary.itemDiscountTotal)}")
-                    }
-                    if (summary.additionalDiscountAmount > 0.0) {
-                        add("Additional Discount" to "-${BillingEngine.formatCurrency(summary.additionalDiscountAmount)}")
+                    add(SummaryRowItem("Subtotal", BillingEngine.formatCurrency(summary.lineTaxableSubtotal), bold = true))
+                    if (summary.additionalPreTaxDiscountAmount > 0.0) {
+                        add(
+                            SummaryRowItem(
+                                "Additional Invoice Discount",
+                                "-${BillingEngine.formatCurrency(summary.additionalPreTaxDiscountAmount)}"
+                            )
+                        )
+                        add(
+                            SummaryRowItem(
+                                "Total Taxable Value",
+                                BillingEngine.formatCurrency(summary.taxableSubtotal),
+                                bold = true,
+                                dividerBefore = true
+                            )
+                        )
                     }
                     when (taxMode) {
                         TaxMode.CGST_SGST -> {
-                            add("Total CGST" to BillingEngine.formatCurrency(summary.cgstTotal))
-                            add("Total SGST" to BillingEngine.formatCurrency(summary.sgstTotal))
+                            add(SummaryRowItem("Total CGST", BillingEngine.formatCurrency(summary.cgstTotal)))
+                            add(SummaryRowItem("Total SGST", BillingEngine.formatCurrency(summary.sgstTotal)))
                         }
-                        TaxMode.IGST -> add("Total IGST" to BillingEngine.formatCurrency(summary.igstTotal))
-                        TaxMode.EXEMPT -> add("GST (Exempt)" to BillingEngine.formatCurrency(0.0))
+                        TaxMode.IGST -> add(SummaryRowItem("Total IGST", BillingEngine.formatCurrency(summary.igstTotal)))
+                        TaxMode.EXEMPT -> add(SummaryRowItem("GST (Exempt)", BillingEngine.formatCurrency(0.0)))
                     }
                     if (invoice.roundOff && summary.roundOffAdjustment != 0.0) {
                         val sign = if (summary.roundOffAdjustment > 0) "+" else ""
-                        add("Round Off" to "$sign${BillingEngine.formatCurrency(summary.roundOffAdjustment)}")
+                        add(SummaryRowItem("Round Off", "$sign${BillingEngine.formatCurrency(summary.roundOffAdjustment)}"))
                     }
                 }
 
@@ -661,7 +692,7 @@ object InvoicePdfGenerator {
                 if (bankLayouts.isNotEmpty()) {
                     measuredLeftH += 10f + bankLayouts.sumOf { it.height + 1.8 }.toFloat() + 4f
                 }
-                val measuredRightH = totalRows.size * 12.5f + 22f
+                val measuredRightH = totalRows.size * 13f + 26f
                 val exactSummaryH = max(measuredLeftH, measuredRightH)
                 ensureSpace(exactSummaryH.coerceAtMost(pageHeight - margin * 2 - 28f))
 
@@ -696,10 +727,15 @@ object InvoicePdfGenerator {
                 }
 
                 // Right Totals Summary
-                totalRows.forEach { (label, value) ->
-                    drawFittedText(canvas, label, rightSumX, sumRightY, rightSumW * 0.54f, 8f, inkSecondary)
-                    drawFittedText(canvas, value, pageWidth - margin, sumRightY, rightSumW * 0.46f, 8f, inkSecondary, align = Paint.Align.RIGHT)
-                    sumRightY += 12.5f
+                totalRows.forEach { row ->
+                    if (row.dividerBefore) {
+                        canvas.drawLine(rightSumX, sumRightY - 8.5f, pageWidth - margin, sumRightY - 8.5f, strokePaint(borderLight, 0.7f))
+                        sumRightY += 2f
+                    }
+                    val rowColor = if (row.bold) inkDark else inkSecondary
+                    drawFittedText(canvas, row.label, rightSumX, sumRightY, rightSumW * 0.56f, 8f, rowColor, bold = row.bold)
+                    drawFittedText(canvas, row.value, pageWidth - margin, sumRightY, rightSumW * 0.44f, 8f, rowColor, bold = row.bold, align = Paint.Align.RIGHT)
+                    sumRightY += 12.8f
                 }
 
                 sumRightY += 2f

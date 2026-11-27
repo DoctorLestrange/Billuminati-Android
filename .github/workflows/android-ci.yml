@@ -50,7 +50,7 @@ jobs:
 
           echo "Using sdkmanager: $SDK_MANAGER"
           set +o pipefail
-          yes | "$SDK_MANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null
+          yes | "$SDK_MANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null || true
           set -o pipefail
 
           "$SDK_MANAGER" --sdk_root="$SDK_ROOT" --install \
@@ -105,27 +105,34 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           VERSION_NAME=$(grep -oE 'versionName[[:space:]]*=[[:space:]]*"[^"]+"' app/build.gradle.kts | head -n 1 | cut -d'"' -f2)
-          VERSION_NAME="${VERSION_NAME:-1.0}"
-          mkdir -p dist
+          if [ -z "$VERSION_NAME" ]; then
+            echo "::error::Could not extract versionName from app/build.gradle.kts"
+            exit 1
+          fi
+          RELEASE_TAG="v${VERSION_NAME}"
+
+          rm -rf dist && mkdir -p dist
 
           if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
-            echo "Release signing secrets detected — building signed Release APK & AAB..."
+            echo "Release signing secrets detected — building signed Release APK & AAB for ${RELEASE_TAG}..."
             printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > my-upload-key.jks
             export KEYSTORE_PATH="$PWD/my-upload-key.jks"
             gradle :app:assembleRelease :app:bundleRelease --no-configuration-cache --console=plain
-            cp app/build/outputs/apk/release/app-release.apk "dist/Billuminati-v${VERSION_NAME}.apk"
-            cp app/build/outputs/bundle/release/app-release.aab "dist/Billuminati-v${VERSION_NAME}.aab"
+            cp app/build/outputs/apk/release/app-release.apk "dist/Billuminati-${RELEASE_TAG}.apk"
+            cp app/build/outputs/bundle/release/app-release.aab "dist/Billuminati-${RELEASE_TAG}.aab"
             echo "BUILD_VARIANT=release" >> "$GITHUB_ENV"
           else
-            echo "No release keystore secrets configured — building directly installable signed APK..."
+            echo "No release keystore secrets configured — building directly installable signed APK for ${RELEASE_TAG}..."
             gradle :app:assembleDebug --no-configuration-cache --console=plain
-            cp app/build/outputs/apk/debug/app-debug.apk "dist/Billuminati-v${VERSION_NAME}.apk"
+            cp app/build/outputs/apk/debug/app-debug.apk "dist/Billuminati-${RELEASE_TAG}.apk"
             echo "BUILD_VARIANT=debug" >> "$GITHUB_ENV"
           fi
 
-          (cd dist && sha256sum * > SHA256SUMS.txt)
+          (cd dist && sha256sum Billuminati-* > SHA256SUMS.txt)
           echo "VERSION_NAME=${VERSION_NAME}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
           ls -lh dist/
+          cat dist/SHA256SUMS.txt
 
       - name: Upload Test Reports
         if: always()
@@ -146,26 +153,28 @@ jobs:
       - name: Upload Downloadable APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: billuminati-android-apk
+          name: billuminati-${{ env.RELEASE_TAG }}-apk
           path: dist/*
           if-no-files-found: error
 
-      - name: Publish Direct-Download GitHub Release
+      - name: Publish Versioned GitHub Release
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "Billuminati v${{ env.VERSION_NAME }} (Latest Android Build)"
-          make_latest: true
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: "Billuminati ${{ env.RELEASE_TAG }}"
+          make_latest: "true"
+          generate_release_notes: true
           body: |
-            ## Billuminati for Android (`v${{ env.VERSION_NAME }}`)
+            ## Billuminati for Android (`${{ env.RELEASE_TAG }}`)
 
             Offline-first Indian GST Tax Invoice & Billing Studio — built natively with Kotlin, Jetpack Compose, Material Design 3, and Room SQLite.
 
             ### Direct APK Installation
-            1. Download **`Billuminati-v${{ env.VERSION_NAME }}.apk`** from the **Assets** section below.
-            2. Open the APK on your Android 7.0+ (API 24+) device and allow installing from your browser/files app if prompted.
-            3. Verify integrity optionally with `SHA256SUMS.txt`.
+            1. Download **`Billuminati-${{ env.RELEASE_TAG }}.apk`** from the **Assets** section below.
+            2. Open the APK on your Android 7.0+ (API 24+) device and allow installing from your browser or files app if prompted.
+            3. Optionally verify the file checksum against `SHA256SUMS.txt`.
 
             *Build variant: `${{ env.BUILD_VARIANT }}` · Commit: `${{ github.sha }}`*
           files: |

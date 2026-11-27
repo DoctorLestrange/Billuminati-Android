@@ -54,6 +54,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -87,7 +88,7 @@ import kotlin.math.roundToInt
 fun PdfPreviewScreen(
     invoice: Invoice,
     onBack: () -> Unit,
-    onUpdatePdfOptions: (PdfPageOptions) -> Unit,
+    onUpdatePdfOptions: ((PdfPageOptions) -> PdfPageOptions) -> Unit,
     onUpdateSellerLogo: (String) -> Unit,
     onShowMessage: (String) -> Unit
 ) {
@@ -101,10 +102,16 @@ fun PdfPreviewScreen(
     var renderedPages by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
     var currentPdfFile by remember { mutableStateOf<File?>(null) }
     var renderError by remember { mutableStateOf<String?>(null) }
+    var retryNonce by remember { mutableIntStateOf(0) }
 
     // Pinch-to-zoom & pan state (never hijacks 1-finger vertical LazyColumn scrolling at 100%)
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
+
+    LaunchedEffect(invoice.pdfOptions.paperSize, invoice.pdfOptions.orientation) {
+        zoomScale = 1f
+        panOffset = Offset.Zero
+    }
 
     val savePdfLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/pdf")
@@ -131,8 +138,9 @@ fun PdfPreviewScreen(
         }
     }
 
-    // Regenerate native IBM Plex Serif PDF & PdfRenderer bitmaps whenever invoice or pdfOptions change
-    LaunchedEffect(invoice) {
+    // Regenerate native IBM Plex Serif PDF & PdfRenderer bitmaps whenever invoice content or pdfOptions change
+    val renderKey = remember(invoice) { invoice.copy(updatedAt = "") }
+    LaunchedEffect(renderKey, retryNonce) {
         if (renderedPages.isNotEmpty()) {
             delay(180)
         }
@@ -234,32 +242,38 @@ fun PdfPreviewScreen(
                         },
                         enabled = currentPdfFile != null && !isRendering,
                         shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                         modifier = Modifier
                             .weight(1f)
                             .testTag("pdf_share_button")
                     ) {
                         Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Share", style = MaterialTheme.typography.labelMedium)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share", style = MaterialTheme.typography.labelMedium, maxLines = 1)
                     }
 
                     OutlinedButton(
                         onClick = {
                             val file = currentPdfFile
                             if (file != null && file.exists()) {
-                                PdfExportHelper.printPdfFile(context, file, invoice.invoiceNumber)
-                                    .onFailure { onShowMessage(it.message ?: "Unable to print PDF") }
+                                PdfExportHelper.printPdfFile(
+                                    context = context,
+                                    pdfFile = file,
+                                    jobName = invoice.invoiceNumber,
+                                    pdfOptions = invoice.pdfOptions
+                                ).onFailure { onShowMessage(it.message ?: "Unable to print PDF") }
                             }
                         },
                         enabled = currentPdfFile != null && !isRendering,
                         shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                         modifier = Modifier
                             .weight(1f)
                             .testTag("pdf_print_button")
                     ) {
                         Icon(Icons.Outlined.Print, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Print", style = MaterialTheme.typography.labelMedium)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Print", style = MaterialTheme.typography.labelMedium, maxLines = 1)
                     }
 
                     Button(
@@ -268,13 +282,14 @@ fun PdfPreviewScreen(
                         },
                         enabled = currentPdfFile != null && !isRendering,
                         shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier
-                            .weight(1.2f)
+                            .weight(1.25f)
                             .testTag("pdf_save_button")
                     ) {
                         Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Save PDF", style = MaterialTheme.typography.labelMedium)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Save PDF", style = MaterialTheme.typography.labelMedium, maxLines = 1)
                     }
                 }
             }
@@ -301,11 +316,19 @@ fun PdfPreviewScreen(
                     }
                 }
                 renderError != null -> {
-                    Text(
-                        text = renderError ?: "PDF rendering error",
-                        color = MaterialTheme.colorScheme.error,
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.padding(24.dp)
-                    )
+                    ) {
+                        Text(
+                            text = renderError ?: "PDF rendering error",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        OutlinedButton(onClick = { retryNonce++ }) {
+                            Text("Retry")
+                        }
+                    }
                 }
                 else -> {
                     Box(
