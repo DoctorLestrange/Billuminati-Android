@@ -4,10 +4,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -32,6 +37,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -68,6 +74,8 @@ import com.example.ui.theme.BilluminatiTheme
 import com.example.ui.theme.PlusJakartaSansFontFamily
 import com.example.ui.theme.squareRuledBackground
 import com.example.ui.viewmodel.BilluminatiViewModel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 object Routes {
     const val DASHBOARD = "dashboard"
@@ -123,17 +131,20 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BilluminatiApp(viewModel: BilluminatiViewModel) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val editingInvoice by viewModel.editingInvoice.collectAsStateWithLifecycle()
-    val isCreatingNew by viewModel.isCreatingNew.collectAsStateWithLifecycle()
-    val hasUnsavedChanges by viewModel.hasUnsavedChanges.collectAsStateWithLifecycle()
-    val pdfPreviewInvoiceId by viewModel.pdfPreviewInvoiceId.collectAsStateWithLifecycle()
+    // Only collect lightweight theme/onboarding state at the root so typing in the Editor
+    // or searching in the Dashboard never recomposes the root host, TopAppBar, or background grid.
+    val preferences by viewModel.preferences.collectAsStateWithLifecycle()
+    val isLoaded by remember(viewModel) {
+        viewModel.uiState.map { it.isLoaded }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = false)
 
-    val isDark = uiState.preferences.isDarkTheme
+    val isDark = preferences.isDarkTheme
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: Routes.DASHBOARD
-    val isTopLevel = currentRoute in setOf(Routes.DASHBOARD, Routes.CATALOG, Routes.SETTINGS)
+    val isTopLevel = currentRoute == Routes.DASHBOARD ||
+        currentRoute == Routes.CATALOG ||
+        currentRoute == Routes.SETTINGS
 
     var settingsTab by rememberSaveable { mutableIntStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -153,11 +164,13 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
         ) {
             val isExpandedWidth = maxWidth >= 840.dp
 
-            val navigateTopLevel: (String) -> Unit = { route ->
-                navController.navigate(route) {
-                    popUpTo(Routes.DASHBOARD) { saveState = true }
-                    launchSingleTop = true
-                    restoreState = true
+            val navigateTopLevel: (String) -> Unit = remember(navController) {
+                { route ->
+                    navController.navigate(route) {
+                        popUpTo(Routes.DASHBOARD) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
                 }
             }
 
@@ -191,9 +204,16 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                     VerticalDivider(color = MaterialTheme.colorScheme.outline)
                 }
 
+                // Full-screen child destinations (Editor, PDF Preview) own their own Scaffold & insets.
+                // Using WindowInsets(0) when !isTopLevel eliminates double status-bar & nav-bar blank gaps.
                 Scaffold(
                     modifier = Modifier.weight(1f),
                     containerColor = Color.Transparent,
+                    contentWindowInsets = if (isTopLevel) {
+                        ScaffoldDefaults.contentWindowInsets
+                    } else {
+                        WindowInsets(0, 0, 0, 0)
+                    },
                     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                     topBar = {
                         if (isTopLevel) {
@@ -202,7 +222,7 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                                 Routes.SETTINGS -> "Settings"
                                 else -> "Billuminati"
                             }
-                            androidx.compose.foundation.layout.Column {
+                            Column {
                                 TopAppBar(
                                     colors = TopAppBarDefaults.topAppBarColors(
                                         containerColor = MaterialTheme.colorScheme.surface
@@ -219,7 +239,7 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                                     },
                                     actions = {
                                         IconButton(
-                                            onClick = { viewModel.toggleTheme() },
+                                            onClick = viewModel::toggleTheme,
                                             modifier = Modifier.testTag("theme_toggle_button")
                                         ) {
                                             Icon(
@@ -284,11 +304,16 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                     NavHost(
                         navController = navController,
                         startDestination = Routes.DASHBOARD,
+                        enterTransition = { fadeIn(animationSpec = tween(140)) },
+                        exitTransition = { fadeOut(animationSpec = tween(110)) },
+                        popEnterTransition = { fadeIn(animationSpec = tween(140)) },
+                        popExitTransition = { fadeOut(animationSpec = tween(110)) },
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding)
                     ) {
                         composable(Routes.DASHBOARD) {
+                            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
                             DashboardScreen(
                                 uiState = uiState,
                                 isDark = isDark,
@@ -317,14 +342,19 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                         }
 
                         composable(Routes.CATALOG) {
+                            val catalog by remember(viewModel) {
+                                viewModel.uiState.map { it.catalog }.distinctUntilChanged()
+                            }.collectAsStateWithLifecycle(initialValue = viewModel.uiState.value.catalog)
                             CatalogScreen(
-                                catalog = uiState.catalog,
+                                catalog = catalog,
                                 onAddCatalogItem = viewModel::addCatalogItem,
+                                onUpdateCatalogItem = viewModel::updateCatalogItem,
                                 onDeleteCatalogItem = viewModel::deleteCatalogItem
                             )
                         }
 
                         composable(Routes.SETTINGS) {
+                            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
                             SettingsScreen(
                                 defaults = uiState.defaults,
                                 invoiceCount = uiState.invoices.size,
@@ -339,13 +369,20 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                         }
 
                         composable(Routes.EDITOR) {
-                            val draft = editingInvoice
-                            if (draft != null) {
+                            val draft by viewModel.editingInvoice.collectAsStateWithLifecycle()
+                            val isCreatingNew by viewModel.isCreatingNew.collectAsStateWithLifecycle()
+                            val hasUnsavedChanges by viewModel.hasUnsavedChanges.collectAsStateWithLifecycle()
+                            val catalog by remember(viewModel) {
+                                viewModel.uiState.map { it.catalog }.distinctUntilChanged()
+                            }.collectAsStateWithLifecycle(initialValue = viewModel.uiState.value.catalog)
+
+                            val activeDraft = draft
+                            if (activeDraft != null) {
                                 InvoiceEditorScreen(
-                                    invoice = draft,
+                                    invoice = activeDraft,
                                     isCreatingNew = isCreatingNew,
                                     hasUnsavedChanges = hasUnsavedChanges,
-                                    catalog = uiState.catalog,
+                                    catalog = catalog,
                                     isDark = isDark,
                                     isExpandedWidth = isExpandedWidth,
                                     onBack = { navController.popBackStack() },
@@ -361,7 +398,7 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                                     onRemoveItem = viewModel::removeLineItem,
                                     onUpdateLineItem = viewModel::updateLineItem,
                                     onUpdateSellerLogo = { logo ->
-                                        viewModel.updateSellerLogoEverywhere(draft.id, logo)
+                                        viewModel.updateSellerLogoEverywhere(activeDraft.id, logo)
                                     },
                                     onSave = { viewModel.saveEditingInvoice() },
                                     onSaveAndExit = {
@@ -383,6 +420,10 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                         }
 
                         composable(Routes.PDF_PREVIEW) {
+                            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+                            val editingInvoice by viewModel.editingInvoice.collectAsStateWithLifecycle()
+                            val pdfPreviewInvoiceId by viewModel.pdfPreviewInvoiceId.collectAsStateWithLifecycle()
+
                             val previewInv = remember(uiState.invoices, editingInvoice, pdfPreviewInvoiceId) {
                                 viewModel.getInvoiceForPreview()
                             }
@@ -406,7 +447,7 @@ fun BilluminatiApp(viewModel: BilluminatiViewModel) {
                 }
             }
 
-            if (uiState.isLoaded && !uiState.preferences.welcomeSeen) {
+            if (isLoaded && !preferences.welcomeSeen) {
                 WelcomeDialog(
                     onDismiss = viewModel::dismissWelcome,
                     onSetupSellerProfile = {

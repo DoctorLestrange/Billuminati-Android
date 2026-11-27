@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -53,6 +55,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -138,11 +141,23 @@ fun InvoiceEditorScreen(
 ) {
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showValidationErrors by remember { mutableStateOf(false) }
+    var validationScrollTrigger by remember { mutableIntStateOf(0) }
     var showSellerBankOverride by rememberSaveable(invoice.id) { mutableStateOf(false) }
     var activeTab by rememberSaveable(invoice.id) { mutableIntStateOf(if (isCreatingNew) 0 else 1) }
     var editingItemId by rememberSaveable(invoice.id) { mutableStateOf<String?>(null) }
 
+    val mobileListState = rememberLazyListState()
+    val expandedListState = rememberLazyListState()
+
     val validation = remember(invoice) { validateInvoiceForSave(invoice) }
+
+    LaunchedEffect(validationScrollTrigger, activeTab) {
+        if (!isExpandedWidth) {
+            mobileListState.scrollToItem(0)
+        } else if (validationScrollTrigger > 0) {
+            expandedListState.scrollToItem(0)
+        }
+    }
 
     val handleBackAttempt = {
         if (hasUnsavedChanges) {
@@ -158,6 +173,7 @@ fun InvoiceEditorScreen(
             if (!isExpandedWidth) {
                 activeTab = validation.firstErrorTab
             }
+            validationScrollTrigger++
             onShowMessage(validation.errors.firstOrNull() ?: fallbackMessage)
         } else {
             showValidationErrors = false
@@ -200,8 +216,13 @@ fun InvoiceEditorScreen(
         if (idx >= 0) idx to invoice.items[idx] else null
     }
 
+    val formattedGrandTotal = remember(summary.grandTotal) {
+        BillingEngine.formatCurrency(summary.grandTotal)
+    }
+
     Scaffold(
         containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             Column {
                 TopAppBar(
@@ -258,7 +279,7 @@ fun InvoiceEditorScreen(
                             SingleChoiceSegmentedButtonRow(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 8.dp)
                             ) {
                                 val tabs = listOf(
                                     Triple(0, "Details", "editor_tab_details"),
@@ -313,7 +334,7 @@ fun InvoiceEditorScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = BillingEngine.formatCurrency(summary.grandTotal),
+                                text = formattedGrandTotal,
                                 style = MonoAmountLarge,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
@@ -364,10 +385,11 @@ fun InvoiceEditorScreen(
             if (!isExpandedWidth) {
                 // Focused Mobile Vertical Layout (1 active tab at a time)
                 LazyColumn(
+                    state = mobileListState,
                     modifier = Modifier
                         .fillMaxSize()
                         .widthIn(max = 720.dp),
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     if (showValidationErrors && validation.errors.isNotEmpty()) {
@@ -493,7 +515,11 @@ fun InvoiceEditorScreen(
                                 }
                             }
 
-                            itemsIndexed(items = invoice.items, key = { _, item -> item.id }) { idx, item ->
+                            itemsIndexed(
+                                items = invoice.items,
+                                key = { _, item -> item.id },
+                                contentType = { _, _ -> "line_item" }
+                            ) { idx, item ->
                                 val lineCalc = summary.lines[item.id] ?: BillingEngine.calculateLineItem(item, taxMode)
                                 LineItemCard(
                                     index = idx,
@@ -554,10 +580,12 @@ fun InvoiceEditorScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxSize()
-                        .widthIn(max = 1320.dp),
+                        .widthIn(max = 1320.dp)
+                        .navigationBarsPadding(),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     LazyColumn(
+                        state = expandedListState,
                         modifier = Modifier
                             .weight(1.35f)
                             .fillMaxHeight(),
@@ -655,7 +683,11 @@ fun InvoiceEditorScreen(
                                 }
                             }
                         }
-                        itemsIndexed(items = invoice.items, key = { _, item -> item.id }) { idx, item ->
+                        itemsIndexed(
+                            items = invoice.items,
+                            key = { _, item -> item.id },
+                            contentType = { _, _ -> "line_item" }
+                        ) { idx, item ->
                             val lineCalc = summary.lines[item.id] ?: BillingEngine.calculateLineItem(item, taxMode)
                             LineItemCard(
                                 index = idx,

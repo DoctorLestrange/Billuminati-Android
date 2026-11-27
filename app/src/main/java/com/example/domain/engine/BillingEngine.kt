@@ -45,38 +45,48 @@ object BillingEngine {
         "", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"
     )
 
+    private val UTC_TIME_ZONE: TimeZone = TimeZone.getTimeZone("UTC")
+
+    private val localDateFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    }
+
+    private val utcDateFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+            timeZone = UTC_TIME_ZONE
+            isLenient = false
+        }
+    }
+
+    private val utcTimestampFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+            timeZone = UTC_TIME_ZONE
+        }
+    }
+
     fun todayIsoDate(nowMillis: Long = System.currentTimeMillis()): String {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        return sdf.format(Date(nowMillis))
+        return localDateFormat.get()!!.format(Date(nowMillis))
     }
 
     fun addDaysIsoDate(days: Int, nowMillis: Long = System.currentTimeMillis()): String {
         val cal = Calendar.getInstance()
         cal.timeInMillis = nowMillis
         cal.add(Calendar.DAY_OF_YEAR, days)
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        return sdf.format(cal.time)
+        return localDateFormat.get()!!.format(cal.time)
     }
 
     fun nowIsoTimestamp(nowMillis: Long = System.currentTimeMillis()): String {
-        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-        sdf.timeZone = TimeZone.getTimeZone("UTC")
-        return sdf.format(Date(nowMillis))
+        return utcTimestampFormat.get()!!.format(Date(nowMillis))
     }
 
     fun millisToIsoDate(utcMillis: Long): String {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        sdf.timeZone = TimeZone.getTimeZone("UTC")
-        return sdf.format(Date(utcMillis))
+        return utcDateFormat.get()!!.format(Date(utcMillis))
     }
 
     fun isoDateToUtcMillis(isoDate: String): Long? {
         if (isoDate.length < 10) return null
         return try {
-            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-            sdf.timeZone = TimeZone.getTimeZone("UTC")
-            sdf.isLenient = false
-            sdf.parse(isoDate.take(10))?.time
+            utcDateFormat.get()!!.parse(isoDate.take(10))?.time
         } catch (_: Exception) {
             null
         }

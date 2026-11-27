@@ -6,7 +6,7 @@
 
 **Offline-First Indian GST Tax Invoice & Billing Studio — Built 100% Native with Kotlin & Jetpack Compose**
 
-[![Release](https://img.shields.io/badge/Release-v0.2.0-18181B?style=flat-square&logo=github)](../../releases/tag/v0.2.0)
+[![Release](https://img.shields.io/badge/Release-v0.2.1-18181B?style=flat-square&logo=github)](../../releases/tag/v0.2.1)
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B%20(API%2024–36)-18181B?style=flat-square&logo=android&logoColor=white)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.4.21-18181B?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-18181B?style=flat-square&logo=jetpackcompose&logoColor=white)](https://developer.android.com/compose)
@@ -22,8 +22,8 @@
 
 Ready-to-install Android APKs (plus `SHA256SUMS.txt` verification checksums) are built and verified automatically by GitHub Actions on every push to `main` and every version tag (`v*`):
 
-1. Open [**Releases -> v0.2.0 (Latest)**](../../releases/latest).
-2. Download **`Billuminati-v0.2.0.apk`** onto your Android 7.0+ (API 24+) device.
+1. Open [**Releases -> v0.2.1 (Latest)**](../../releases/latest).
+2. Download **`Billuminati-v0.2.1.apk`** onto your Android 7.0+ (API 24+) device.
 3. Tap the downloaded APK to install (enable *Install unknown apps* if prompted).
 
 ---
@@ -104,7 +104,7 @@ app/src/main/java/com/example/
         ├── EditorSummaryCard.kt     # Live GST slab breakdown, pre-tax discount & Grand Total card
         ├── PdfPreviewScreen.kt      # Pinch-zoom multi-page preview, retry handling & Save/Share/Print bar
         ├── PdfSettingsSheet.kt      # Atomic PDF paper, orientation, margin, accent & column controls
-        ├── CatalogScreen.kt         # Reusable HSN/SKU product & packaging presets manager
+        ├── CatalogScreen.kt         # Create, edit & delete reusable HSN/SKU product presets
         └── SettingsScreen.kt        # Business Profile, Seller Logo, JSON Backup/Restore & About version card
 ```
 
@@ -191,7 +191,7 @@ gradle :app:lintDebug
    gradle :app:assembleRelease
    ```
 
-> **Automated GitHub Releases**: Every push to `main` automatically tags and publishes a directly installable APK (`Billuminati-v<versionName>.apk`) and `SHA256SUMS.txt` under **GitHub Releases** (currently **`v0.2.0`**). Pushing a version tag (`v*`) or triggering the **Tagged Release APK & AAB** workflow manually also builds and publishes the release. To sign automated releases with your production upload key (and also publish an `.aab` bundle), add `RELEASE_KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` under **Settings -> Secrets and variables -> Actions**.
+> **Automated GitHub Releases**: Every push to `main` automatically tags and publishes a directly installable APK (`Billuminati-v<versionName>.apk`) and `SHA256SUMS.txt` under **GitHub Releases** (currently **`v0.2.1`**). Pushing a version tag (`v*`) or triggering the **Tagged Release APK & AAB** workflow manually also builds and publishes the release. To sign automated releases with your production upload key (and also publish an `.aab` bundle), add `RELEASE_KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` under **Settings -> Secrets and variables -> Actions**.
 
 > **Note on Play Store Publishing**: The project uses `applicationId = "com.aistudio.billuminati.gstapp"`. Before publishing to your own Google Play Console account, customize `applicationId` in `app/build.gradle.kts` to your reverse-domain package identifier (e.g., `com.yourorg.billuminati`) and optionally enable `isMinifyEnabled = true` (`app/proguard-rules.pro` already includes keep rules for Moshi adapters, domain models, and Room).
 

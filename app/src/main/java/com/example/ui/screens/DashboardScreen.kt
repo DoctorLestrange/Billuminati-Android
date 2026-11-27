@@ -83,6 +83,7 @@ import com.example.domain.model.DateFilterPreset
 import com.example.domain.model.Invoice
 import com.example.domain.model.InvoiceSortOption
 import com.example.domain.model.InvoiceStatus
+import com.example.domain.model.InvoiceSummaryCalculation
 import com.example.domain.model.TaxMode
 import com.example.ui.components.StatusBadgeSelector
 import com.example.ui.theme.JetBrainsMonoFontFamily
@@ -306,9 +307,16 @@ fun DashboardScreen(
                     )
                 }
             } else {
-                items(items = uiState.filteredInvoices, key = { it.id }) { invoice ->
+                items(
+                    items = uiState.filteredInvoices,
+                    key = { it.id },
+                    contentType = { "invoice_card" }
+                ) { invoice ->
+                    val summary = uiState.invoiceSummaries[invoice.id]
+                        ?: remember(invoice) { BillingEngine.calculateInvoiceSummary(invoice) }
                     InvoiceLedgerCard(
                         invoice = invoice,
+                        summary = summary,
                         isDark = isDark,
                         onEdit = { onEditInvoice(invoice) },
                         onPreviewPdf = { onOpenPdfPreview(invoice) },
@@ -746,6 +754,7 @@ private fun ExpandedKpiCard(
 @Composable
 private fun InvoiceLedgerCard(
     invoice: Invoice,
+    summary: InvoiceSummaryCalculation,
     isDark: Boolean,
     onEdit: () -> Unit,
     onPreviewPdf: () -> Unit,
@@ -753,11 +762,15 @@ private fun InvoiceLedgerCard(
     onRequestDelete: () -> Unit,
     onStatusChange: (InvoiceStatus) -> Unit
 ) {
-    val summary = remember(invoice) { BillingEngine.calculateInvoiceSummary(invoice) }
     val status = InvoiceStatus.fromLabel(invoice.status)
     val taxMode = TaxMode.fromCode(invoice.taxMode)
-    val buyerName = BillingEngine.formatBuyerDisplayName(invoice)
-    val paymentNote = BillingEngine.formatPaymentMethodSummary(invoice)
+    val buyerName = remember(invoice.isCashCustomer, invoice.buyer.companyName, invoice.buyer.name) {
+        BillingEngine.formatBuyerDisplayName(invoice)
+    }
+    val paymentNote = remember(invoice.status, invoice.paymentMethod, invoice.paymentMethodOther, invoice.paymentDate, invoice.paymentMethodDetails) {
+        BillingEngine.formatPaymentMethodSummary(invoice)
+    }
+    val grandTotalText = remember(summary.grandTotal) { BillingEngine.formatCurrency(summary.grandTotal) }
     var showOverflowMenu by remember { mutableStateOf(false) }
 
     Card(
@@ -788,7 +801,7 @@ private fun InvoiceLedgerCard(
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = BillingEngine.formatCurrency(summary.grandTotal),
+                    text = grandTotalText,
                     style = MonoAmountLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )

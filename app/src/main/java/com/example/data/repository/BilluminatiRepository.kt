@@ -12,8 +12,11 @@ import com.example.domain.model.BilluminatiBackup
 import com.example.domain.model.BusinessDefaults
 import com.example.domain.model.CatalogItem
 import com.example.domain.model.Invoice
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 class BilluminatiRepository(
     private val dao: BilluminatiDao,
@@ -27,7 +30,7 @@ class BilluminatiRepository(
                 BillingEngine.normalizeInvoiceRecord(it, idx)
             }
         }
-    }
+    }.flowOn(Dispatchers.Default)
 
     val catalogFlow: Flow<List<CatalogItem>> = dao.observeCatalog().map { entities ->
         entities.map { entity ->
@@ -43,7 +46,7 @@ class BilluminatiRepository(
                 taxPercent = entity.taxPercent
             )
         }
-    }
+    }.flowOn(Dispatchers.Default)
 
     val businessDefaultsFlow: Flow<BusinessDefaults> = dao.observeBusinessDefaults().map { entity ->
         if (entity == null) {
@@ -56,43 +59,56 @@ class BilluminatiRepository(
                 defaultTermsAndConditions = entity.defaultTermsAndConditions
             )
         }
-    }
+    }.flowOn(Dispatchers.Default)
 
     val preferencesFlow: Flow<AppPreferences> = preferencesStore.preferencesFlow
 
-    suspend fun getAllInvoicesOnce(): List<Invoice> =
-        dao.getAllInvoicesOnce().mapIndexedNotNull { idx, entity ->
-            serializer.invoiceFromJson(entity.payloadJson)?.let {
-                BillingEngine.normalizeInvoiceRecord(it, idx)
+    suspend fun getAllInvoicesOnce(): List<Invoice> {
+        val entities = dao.getAllInvoicesOnce()
+        return withContext(Dispatchers.Default) {
+            entities.mapIndexedNotNull { idx, entity ->
+                serializer.invoiceFromJson(entity.payloadJson)?.let {
+                    BillingEngine.normalizeInvoiceRecord(it, idx)
+                }
             }
         }
+    }
 
     suspend fun getInvoiceById(id: String): Invoice? {
         val entity = dao.getInvoiceById(id) ?: return null
-        return serializer.invoiceFromJson(entity.payloadJson)?.let {
-            BillingEngine.normalizeInvoiceRecord(it)
+        return withContext(Dispatchers.Default) {
+            serializer.invoiceFromJson(entity.payloadJson)?.let {
+                BillingEngine.normalizeInvoiceRecord(it)
+            }
         }
     }
 
     suspend fun getBusinessDefaultsOnce(): BusinessDefaults {
         val entity = dao.getBusinessDefaultsOnce() ?: return BusinessDefaults()
-        return BusinessDefaults(
-            defaultSeller = serializer.sellerFromJson(entity.sellerJson),
-            defaultBank = serializer.bankFromJson(entity.bankJson),
-            defaultPdfOptions = serializer.pdfOptionsFromJson(entity.pdfOptionsJson),
-            defaultTermsAndConditions = entity.defaultTermsAndConditions
-        )
+        return withContext(Dispatchers.Default) {
+            BusinessDefaults(
+                defaultSeller = serializer.sellerFromJson(entity.sellerJson),
+                defaultBank = serializer.bankFromJson(entity.bankJson),
+                defaultPdfOptions = serializer.pdfOptionsFromJson(entity.pdfOptionsJson),
+                defaultTermsAndConditions = entity.defaultTermsAndConditions
+            )
+        }
     }
 
     suspend fun saveInvoice(invoice: Invoice) {
-        val normalized = BillingEngine.normalizeInvoiceRecord(invoice)
-        dao.upsertInvoice(normalized.toEntity())
+        val entity = withContext(Dispatchers.Default) {
+            BillingEngine.normalizeInvoiceRecord(invoice).toEntity()
+        }
+        dao.upsertInvoice(entity)
     }
 
     suspend fun saveInvoices(invoices: List<Invoice>) {
-        dao.upsertInvoices(invoices.mapIndexed { idx, inv ->
-            BillingEngine.normalizeInvoiceRecord(inv, idx).toEntity()
-        })
+        val entities = withContext(Dispatchers.Default) {
+            invoices.mapIndexed { idx, inv ->
+                BillingEngine.normalizeInvoiceRecord(inv, idx).toEntity()
+            }
+        }
+        dao.upsertInvoices(entities)
     }
 
     suspend fun deleteInvoice(id: String) {
@@ -100,8 +116,10 @@ class BilluminatiRepository(
     }
 
     suspend fun saveCatalogItem(item: CatalogItem) {
-        val normalized = BillingEngine.normalizeCatalogItem(item)
-        dao.upsertCatalogItem(normalized.toEntity())
+        val entity = withContext(Dispatchers.Default) {
+            BillingEngine.normalizeCatalogItem(item).toEntity()
+        }
+        dao.upsertCatalogItem(entity)
     }
 
     suspend fun deleteCatalogItem(id: String) {
@@ -109,7 +127,8 @@ class BilluminatiRepository(
     }
 
     suspend fun saveBusinessDefaults(defaults: BusinessDefaults) {
-        dao.upsertBusinessDefaults(defaults.toEntity())
+        val entity = withContext(Dispatchers.Default) { defaults.toEntity() }
+        dao.upsertBusinessDefaults(entity)
     }
 
     suspend fun importBackup(
@@ -117,23 +136,26 @@ class BilluminatiRepository(
         replaceExisting: Boolean,
         currentDefaults: BusinessDefaults
     ) {
-        val normalizedInvoices = backup.invoices.mapIndexed { idx, inv ->
-            BillingEngine.normalizeInvoiceRecord(inv, idx).toEntity()
-        }
-        val updatedDefaults = BusinessDefaults(
-            defaultSeller = backup.defaultSeller ?: currentDefaults.defaultSeller,
-            defaultBank = backup.defaultBank ?: currentDefaults.defaultBank,
-            defaultPdfOptions = backup.defaultPdfOptions ?: currentDefaults.defaultPdfOptions,
-            defaultTermsAndConditions = backup.defaultTermsAndConditions ?: currentDefaults.defaultTermsAndConditions
-        )
-        val catalogEntities = backup.catalog?.mapIndexed { idx, item ->
-            BillingEngine.normalizeCatalogItem(item, idx).toEntity()
+        val (normalizedInvoices, defaultsEntity, catalogEntities) = withContext(Dispatchers.Default) {
+            val invEntities = backup.invoices.mapIndexed { idx, inv ->
+                BillingEngine.normalizeInvoiceRecord(inv, idx).toEntity()
+            }
+            val updatedDefaults = BusinessDefaults(
+                defaultSeller = backup.defaultSeller ?: currentDefaults.defaultSeller,
+                defaultBank = backup.defaultBank ?: currentDefaults.defaultBank,
+                defaultPdfOptions = backup.defaultPdfOptions ?: currentDefaults.defaultPdfOptions,
+                defaultTermsAndConditions = backup.defaultTermsAndConditions ?: currentDefaults.defaultTermsAndConditions
+            )
+            val catEntities = backup.catalog?.mapIndexed { idx, item ->
+                BillingEngine.normalizeCatalogItem(item, idx).toEntity()
+            }
+            Triple(invEntities, updatedDefaults.toEntity(), catEntities)
         }
 
         dao.importBackupAtomic(
             replaceExisting = replaceExisting,
             invoices = normalizedInvoices,
-            defaults = updatedDefaults.toEntity(),
+            defaults = defaultsEntity,
             catalog = catalogEntities
         )
     }

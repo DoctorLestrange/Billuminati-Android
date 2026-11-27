@@ -52,13 +52,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import android.util.LruCache
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
@@ -424,14 +429,34 @@ fun StatusBadgeSelector(
     }
 }
 
+private val logoBitmapCache = LruCache<String, ImageBitmap>(4)
+
 @Composable
 fun SellerLogoThumbnail(
     logoDataUrl: String,
     size: Dp = 56.dp,
     modifier: Modifier = Modifier
 ) {
-    val bitmap = remember(logoDataUrl) {
-        LogoProcessor.decodeDataUrlToBitmap(logoDataUrl)
+    val cached = remember(logoDataUrl) {
+        if (logoDataUrl.isBlank()) null else logoBitmapCache.get(logoDataUrl)
+    }
+    val imageBitmap by produceState(initialValue = cached, key1 = logoDataUrl) {
+        if (logoDataUrl.isBlank()) {
+            value = null
+            return@produceState
+        }
+        val existing = logoBitmapCache.get(logoDataUrl)
+        if (existing != null) {
+            value = existing
+        } else {
+            val decoded = withContext(Dispatchers.Default) {
+                LogoProcessor.decodeDataUrlToBitmap(logoDataUrl)?.asImageBitmap()
+            }
+            if (decoded != null) {
+                logoBitmapCache.put(logoDataUrl, decoded)
+            }
+            value = decoded
+        }
     }
     Box(
         modifier = modifier
@@ -441,9 +466,10 @@ fun SellerLogoThumbnail(
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(10.dp)),
         contentAlignment = Alignment.Center
     ) {
-        if (bitmap != null) {
+        val bmp = imageBitmap
+        if (bmp != null) {
             Image(
-                bitmap = bitmap.asImageBitmap(),
+                bitmap = bmp,
                 contentDescription = "Seller business logo",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier

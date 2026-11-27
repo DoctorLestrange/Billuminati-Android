@@ -16,6 +16,7 @@ import com.example.domain.model.DashboardFilters
 import com.example.domain.model.Invoice
 import com.example.domain.model.InvoiceLineItem
 import com.example.domain.model.InvoiceStatus
+import com.example.domain.model.InvoiceSummaryCalculation
 import com.example.domain.model.PackagingType
 import com.example.domain.model.PartyDetails
 import com.example.domain.model.PdfPageOptions
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -53,6 +55,7 @@ data class DashboardMetrics(
 data class BilluminatiUiState(
     val invoices: List<Invoice> = emptyList(),
     val filteredInvoices: List<Invoice> = emptyList(),
+    val invoiceSummaries: Map<String, InvoiceSummaryCalculation> = emptyMap(),
     val metrics: DashboardMetrics = DashboardMetrics(),
     val catalog: List<CatalogItem> = emptyList(),
     val defaults: BusinessDefaults = BusinessDefaults(),
@@ -86,6 +89,12 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
 
+    val preferences: StateFlow<AppPreferences> = repository.preferencesFlow.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = AppPreferences()
+    )
+
     val hasUnsavedChanges: StateFlow<Boolean> = combine(
         _editingInvoice,
         _originalEditingInvoice,
@@ -98,7 +107,7 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
             val originalComparable = original.copy(updatedAt = "")
             currentComparable != originalComparable || (creating && (current.items.any { it.name.isNotBlank() || it.unitPrice > 0.0 } || current.buyer.companyName.isNotBlank()))
         }
-    }.stateIn(
+    }.flowOn(Dispatchers.Default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = false
@@ -111,11 +120,12 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
         repository.preferencesFlow,
         _filters
     ) { invoices, catalog, defaults, prefs, filters ->
-        val metrics = computeMetrics(invoices)
+        val (summaries, metrics) = computeSummariesAndMetrics(invoices)
         val filtered = BillingEngine.filterAndSortInvoices(invoices, filters)
         BilluminatiUiState(
             invoices = invoices,
             filteredInvoices = filtered,
+            invoiceSummaries = summaries,
             metrics = metrics,
             catalog = catalog,
             defaults = defaults,
@@ -123,7 +133,7 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
             filters = filters,
             isLoaded = true
         )
-    }.stateIn(
+    }.flowOn(Dispatchers.Default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = BilluminatiUiState()
@@ -132,7 +142,10 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
     private fun nextId(prefix: String): String =
         "$prefix-${System.currentTimeMillis()}-${idCounter.getAndIncrement()}"
 
-    private fun computeMetrics(invoices: List<Invoice>): DashboardMetrics {
+    private fun computeSummariesAndMetrics(
+        invoices: List<Invoice>
+    ): Pair<Map<String, InvoiceSummaryCalculation>, DashboardMetrics> {
+        val summaries = HashMap<String, InvoiceSummaryCalculation>(invoices.size)
         var totalVol = 0.0
         var paidTotal = 0.0
         var paidCount = 0
@@ -142,7 +155,9 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
         var overdueCount = 0
 
         for (inv in invoices) {
-            val total = BillingEngine.calculateInvoiceSummary(inv).grandTotal
+            val summary = BillingEngine.calculateInvoiceSummary(inv)
+            summaries[inv.id] = summary
+            val total = summary.grandTotal
             totalVol = BillingEngine.roundCurrency(totalVol + total)
             when (InvoiceStatus.fromLabel(inv.status)) {
                 InvoiceStatus.PAID -> {
@@ -159,7 +174,7 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
         }
-        return DashboardMetrics(
+        return summaries to DashboardMetrics(
             totalVolume = totalVol,
             totalCount = invoices.size,
             paidTotal = paidTotal,
@@ -252,7 +267,7 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
 
     fun updateEditingInvoice(transform: (Invoice) -> Invoice) {
         _editingInvoice.update { current ->
-            current?.let { transform(it).copy(updatedAt = BillingEngine.nowIsoTimestamp()) }
+            current?.let { transform(it) }
         }
     }
 
@@ -580,6 +595,29 @@ class BilluminatiViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             repository.saveCatalogItem(item)
             _snackbarEvents.tryEmit("Added \"${item.name}\" to catalog")
+        }
+    }
+
+    fun updateCatalogItem(
+        id: String,
+        name: String,
+        skuOrHsn: String,
+        packagingType: PackagingType,
+        unitPriceInclusive: Double,
+        taxPercent: Double
+    ) {
+        if (id.isBlank() || name.isBlank()) return
+        val item = BillingEngine.createCatalogItemFromInclusive(
+            id = id,
+            name = name,
+            skuOrHsn = skuOrHsn,
+            packagingType = packagingType,
+            unitPriceInclusive = unitPriceInclusive,
+            taxPercent = taxPercent
+        )
+        viewModelScope.launch {
+            repository.saveCatalogItem(item)
+            _snackbarEvents.tryEmit("Updated \"${item.name}\"")
         }
     }
 

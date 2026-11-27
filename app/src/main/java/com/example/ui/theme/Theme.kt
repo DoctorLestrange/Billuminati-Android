@@ -6,9 +6,10 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 
 private val BilluminatiLightColorScheme = lightColorScheme(
@@ -90,23 +91,32 @@ fun BilluminatiTheme(
 
 /**
  * Draws Billuminati's subtle 24dp square-ruled ledger grid behind workspace backgrounds.
+ * Uses [drawWithCache] to pre-build a single [Path] per viewport size so scroll and typing frames
+ * never iterate through dozens of drawLine calls.
  */
-fun Modifier.squareRuledBackground(isDark: Boolean): Modifier = this.drawBehind {
+fun Modifier.squareRuledBackground(isDark: Boolean): Modifier = this.drawWithCache {
     val gridColor = if (isDark) {
         Graphite100.copy(alpha = 0.035f)
     } else {
         Graphite900.copy(alpha = 0.038f)
     }
     val step = 24.dp.toPx()
-    val stroke = 1f
-    var x = 0f
-    while (x < size.width) {
-        drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = stroke)
-        x += step
+    val stroke = Stroke(width = 1f)
+    val gridPath = Path().apply {
+        var x = 0f
+        while (x < size.width) {
+            moveTo(x, 0f)
+            lineTo(x, size.height)
+            x += step
+        }
+        var y = 0f
+        while (y < size.height) {
+            moveTo(0f, y)
+            lineTo(size.width, y)
+            y += step
+        }
     }
-    var y = 0f
-    while (y < size.height) {
-        drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = stroke)
-        y += step
+    onDrawBehind {
+        drawPath(path = gridPath, color = gridColor, style = stroke)
     }
 }

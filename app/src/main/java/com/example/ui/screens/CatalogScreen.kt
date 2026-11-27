@@ -24,8 +24,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Search
@@ -70,10 +72,12 @@ import com.example.ui.theme.MonoLabel
 fun CatalogScreen(
     catalog: List<CatalogItem>,
     onAddCatalogItem: (String, String, PackagingType, Double, Double) -> Unit,
+    onUpdateCatalogItem: (String, String, String, PackagingType, Double, Double) -> Unit = { _, _, _, _, _, _ -> },
     onDeleteCatalogItem: (String) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var showAddSheet by remember { mutableStateOf(false) }
+    var editingPreset by remember { mutableStateOf<CatalogItem?>(null) }
 
     val filteredCatalog = remember(catalog, searchQuery) {
         val q = searchQuery.trim().lowercase()
@@ -135,7 +139,7 @@ fun CatalogScreen(
 
                 item(key = "catalog_count") {
                     Text(
-                        text = "${filteredCatalog.size} saved preset${if (filteredCatalog.size == 1) "" else "s"} · Tap + inside Invoice Editor for 1-tap billing",
+                        text = "${filteredCatalog.size} saved preset${if (filteredCatalog.size == 1) "" else "s"} · Tap any preset to edit or + in Invoice Editor",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 2.dp)
@@ -201,19 +205,28 @@ fun CatalogScreen(
                     }
                 }
             } else {
-                items(items = filteredCatalog, key = { it.id }) { item ->
-                    val inclPrice = BillingEngine.getCatalogItemInclusivePrice(item)
+                items(
+                    items = filteredCatalog,
+                    key = { it.id },
+                    contentType = { "catalog_item" }
+                ) { item ->
+                    val inclPrice = remember(item.unitPrice, item.unitPriceInclusive, item.taxPercent) {
+                        BillingEngine.getCatalogItemInclusivePrice(item)
+                    }
                     Card(
+                        onClick = { editingPreset = item },
                         shape = RoundedCornerShape(14.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("catalog_card_${item.id}")
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
+                                .padding(start = 14.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -248,15 +261,27 @@ fun CatalogScreen(
                                     )
                                 }
                             }
-                            IconButton(
-                                onClick = { onDeleteCatalogItem(item.id) },
-                                modifier = Modifier.testTag("delete_catalog_${item.id}")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.DeleteOutline,
-                                    contentDescription = "Remove ${item.name}",
-                                    tint = MaterialTheme.colorScheme.error
-                                )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { editingPreset = item },
+                                    modifier = Modifier.testTag("edit_catalog_${item.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Edit,
+                                        contentDescription = "Edit ${item.name}",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onDeleteCatalogItem(item.id) },
+                                    modifier = Modifier.testTag("delete_catalog_${item.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.DeleteOutline,
+                                        contentDescription = "Remove ${item.name}",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
                             }
                         }
                     }
@@ -278,28 +303,52 @@ fun CatalogScreen(
     }
 
     if (showAddSheet) {
-        AddCatalogPresetBottomSheet(
-            onAdd = { name, skuOrHsn, packaging, unitPriceIncl, taxPercent ->
+        CatalogPresetBottomSheet(
+            initialItem = null,
+            onSave = { name, skuOrHsn, packaging, unitPriceIncl, taxPercent ->
                 onAddCatalogItem(name, skuOrHsn, packaging, unitPriceIncl, taxPercent)
                 showAddSheet = false
             },
             onDismiss = { showAddSheet = false }
         )
     }
+
+    editingPreset?.let { preset ->
+        CatalogPresetBottomSheet(
+            initialItem = preset,
+            onSave = { name, skuOrHsn, packaging, unitPriceIncl, taxPercent ->
+                onUpdateCatalogItem(preset.id, name, skuOrHsn, packaging, unitPriceIncl, taxPercent)
+                editingPreset = null
+            },
+            onDismiss = { editingPreset = null }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddCatalogPresetBottomSheet(
-    onAdd: (String, String, PackagingType, Double, Double) -> Unit,
+private fun CatalogPresetBottomSheet(
+    initialItem: CatalogItem?,
+    onSave: (String, String, PackagingType, Double, Double) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val isEditing = initialItem != null
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var name by remember { mutableStateOf("") }
-    var skuOrHsn by remember { mutableStateOf("") }
-    var packaging by remember { mutableStateOf(PackagingType.BOX) }
-    var unitPriceIncl by remember { mutableDoubleStateOf(0.0) }
-    var taxPercent by remember { mutableDoubleStateOf(18.0) }
+    var name by remember(initialItem?.id) { mutableStateOf(initialItem?.name ?: "") }
+    var skuOrHsn by remember(initialItem?.id) { mutableStateOf(initialItem?.skuOrHsn ?: "") }
+    var packaging by remember(initialItem?.id) {
+        mutableStateOf(
+            initialItem?.let { PackagingType.fromLabel(it.packagingType) } ?: PackagingType.BOX
+        )
+    }
+    var unitPriceIncl by remember(initialItem?.id) {
+        mutableDoubleStateOf(
+            initialItem?.let { BillingEngine.getCatalogItemInclusivePrice(it) } ?: 0.0
+        )
+    }
+    var taxPercent by remember(initialItem?.id) {
+        mutableDoubleStateOf(initialItem?.taxPercent ?: 18.0)
+    }
     var showPackagingSheet by remember { mutableStateOf(false) }
 
     val previewExcl = remember(unitPriceIncl, taxPercent) {
@@ -321,7 +370,7 @@ private fun AddCatalogPresetBottomSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "Add Catalog Preset",
+                text = if (isEditing) "Edit Catalog Preset" else "Add Catalog Preset",
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -349,7 +398,9 @@ private fun AddCatalogPresetBottomSheet(
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMonoFontFamily),
                     shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("catalog_hsn_input")
                 )
                 ClickableReadOnlyField(
                     value = packaging.label,
@@ -386,7 +437,8 @@ private fun AddCatalogPresetBottomSheet(
                     onValueChange = { taxPercent = it.coerceIn(0.0, 100.0) },
                     label = "GST %",
                     suffix = "%",
-                    modifier = Modifier.weight(0.7f)
+                    modifier = Modifier.weight(0.7f),
+                    testTagName = "catalog_tax_input"
                 )
             }
 
@@ -444,7 +496,7 @@ private fun AddCatalogPresetBottomSheet(
             Button(
                 onClick = {
                     if (name.isNotBlank()) {
-                        onAdd(name, skuOrHsn, packaging, unitPriceIncl, taxPercent)
+                        onSave(name, skuOrHsn, packaging, unitPriceIncl, taxPercent)
                     }
                 },
                 enabled = name.isNotBlank(),
@@ -453,9 +505,13 @@ private fun AddCatalogPresetBottomSheet(
                     .fillMaxWidth()
                     .testTag("catalog_add_button")
             ) {
-                Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(
+                    imageVector = if (isEditing) Icons.Outlined.Check else Icons.Outlined.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Save Preset")
+                Text(if (isEditing) "Update Preset" else "Save Preset")
             }
         }
     }

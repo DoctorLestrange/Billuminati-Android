@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -476,6 +477,7 @@ class BilluminatiIntegrationTest {
         composeTestRule.onNodeWithTag("editor_tab_totals").performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("editor_grand_total_value")
+            .performScrollTo()
             .assertIsDisplayed()
             .assertTextEquals("₹1,062.00")
     }
@@ -550,8 +552,55 @@ class BilluminatiIntegrationTest {
     }
 
     @Test
-    fun buildConfig_reflectsReleaseVersion020() {
-        assertEquals("0.2.0", BuildConfig.VERSION_NAME)
-        assertEquals(2, BuildConfig.VERSION_CODE)
+    fun catalogUi_editsExistingPresetViaBottomSheet() {
+        val existing = CatalogItem(
+            id = "cat-edit-1",
+            name = "Kraft Box",
+            skuOrHsn = "4819",
+            packagingType = PackagingType.BOX.label,
+            unitPrice = 100.0,
+            unitPriceInclusive = 118.0,
+            taxPercent = 18.0
+        )
+        var updatedId = ""
+        var updatedName = ""
+        var updatedPrice = 0.0
+
+        composeTestRule.setContent {
+            BilluminatiTheme(darkTheme = false) {
+                CatalogScreen(
+                    catalog = listOf(existing),
+                    onAddCatalogItem = { _, _, _, _, _ -> },
+                    onUpdateCatalogItem = { id, name, _, _, price, _ ->
+                        updatedId = id
+                        updatedName = name
+                        updatedPrice = price
+                    },
+                    onDeleteCatalogItem = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("edit_catalog_cat-edit-1").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Edit Catalog Preset").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("catalog_name_input").performTextClearance()
+        composeTestRule.onNodeWithTag("catalog_name_input").performTextInput("Heavy Kraft Box")
+        composeTestRule.onNodeWithTag("catalog_price_input").performTextClearance()
+        composeTestRule.onNodeWithTag("catalog_price_input").performTextInput("236")
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("catalog_add_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals("cat-edit-1", updatedId)
+        assertEquals("Heavy Kraft Box", updatedName)
+        assertEquals(236.0, updatedPrice, 0.01)
+    }
+
+    @Test
+    fun buildConfig_reflectsReleaseVersion021() {
+        assertEquals("0.2.1", BuildConfig.VERSION_NAME)
+        assertEquals(3, BuildConfig.VERSION_CODE)
     }
 }

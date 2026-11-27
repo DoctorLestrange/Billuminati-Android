@@ -5,6 +5,20 @@ All notable changes to **Billuminati for Android** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-11-27
+
+### Added
+- **Edit Catalog Presets**: Tap any saved catalog card or its Edit button to modify product name, HSN/SAC, packaging unit, inclusive rate, or GST slab in place.
+
+### Changed
+- **App-Wide Smoothness & Frame Performance**:
+  - Scoped state collection per navigation destination in `MainActivity` so typing in the Invoice Editor or searching the ledger no longer recomposes the root host, top bar, or background grid.
+  - Offloaded Room JSON mapping, metrics aggregation, and backup serialization onto `Dispatchers.Default`, and precomputed invoice ledger summaries off the main thread.
+  - Cached the `24dp` square-ruled drafting grid into a single `Path` via `drawWithCache`, added async + LRU-cached seller logo decoding, reused `ThreadLocal` date formatters, added `LazyColumn` `contentType`, and tightened screen transitions to 140ms.
+
+### Fixed
+- **Removed Extra Top Space on Invoice Editor & PDF Preview**: Eliminated double `WindowInsets` (`statusBars` and `navigationBars`) between the host `Scaffold` and full-screen child `Scaffold`s, and tightened spacing above the Invoice Details / Invoice Number card.
+
 ## [0.2.0] - 2026-11-27
 
 ### Added
